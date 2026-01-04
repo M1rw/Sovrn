@@ -1,0 +1,66 @@
+{
+  "name": "sovrn",
+  "version": "1.0.0",
+  "description": "Sovereign AI Website Builder - 100% offline, self-hosted",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "services/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n web,api -c cyan,magenta \"npm run dev:web\" \"npm run dev:api\"",
+    "dev:web": "npm run dev -w apps/web",
+    "dev:api": "cd services/api && python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000",
+    "build": "npm run build -w apps/web && npm run build -w packages/contracts",
+    "build:docker": "docker compose build",
+    "start": "docker compose up -d",
+    "stop": "docker compose down",
+    "logs": "docker compose logs -f",
+    "test": "npm run test --workspaces --if-present",
+    "test:api": "cd services/api && pytest",
+    "test:web": "npm run test -w apps/web",
+    "test:e2e": "playwright test",
+    "lint": "npm run lint --workspaces --if-present",
+    "lint:fix": "npm run lint:fix --workspaces --if-present",
+    "format": "prettier --write \"**/*.{js,jsx,ts,tsx,json,md}\"",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "db:migrate": "cd services/api && alembic upgrade head",
+    "db:seed": "cd services/api && python scripts/seed.py",
+    "db:reset": "cd services/api && alembic downgrade base && alembic upgrade head && python scripts/seed.py",
+    "model:download": "node scripts/download-model.js",
+    "model:verify": "node scripts/verify-model.js",
+    "eval:run": "cd eval && python run_benchmarks.py",
+    "eval:report": "cd eval && python generate_report.py",
+    "backup": "docker compose exec db pg_dump -U sovrn sovrn | gzip > backups/$(date +%Y%m%d_%H%M%S).sql.gz",
+    "clean": "rm -rf node_modules .next dist build __pycache__ .pytest_cache",
+    "prepare": "husky install"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.40.0",
+    "@types/node": "^20.10.0",
+    "concurrently": "^8.2.2",
+    "husky": "^8.0.3",
+    "lint-staged": "^15.2.0",
+    "prettier": "^3.1.0",
+    "typescript": "^5.3.0"
+  },
+  "lint-staged": {
+    "*.{js,jsx,ts,tsx}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md,yml,yaml}": [
+      "prettier --write"
+    ],
+    "*.py": [
+      "black",
+      "ruff --fix"
+    ]
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  },
+  "packageManager": "npm@10.2.0"
+}

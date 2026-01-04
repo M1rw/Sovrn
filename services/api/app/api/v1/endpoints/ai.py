@@ -1,0 +1,347 @@
+# =============================================================================
+# SOVRN API - AI Endpoints
+# =============================================================================
+"""
+AI-powered generation endpoints using hybrid AI architecture.
+"""
+
+from typing import Optional, Dict, Any, List
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+import structlog
+import json
+
+from app.lib.ai.providers import HybridAIEngine, AIProvider, AIResponse, get_ai_engine, AIMode
+from app.lib.ai.deep_thinking import DeepThinkingEngine, ThinkingPhase
+
+logger = structlog.get_logger()
+
+router = APIRouter()
+
+
+# =============================================================================
+# Request/Response Models
+# =============================================================================
+
+class ChatMessage(BaseModel):
+    """Chat message."""
+    role: str = Field(..., pattern="^(system|user|assistant)$")
+    content: str
+
+
+class ChatRequest(BaseModel):
+    """Chat completion request."""
+    messages: List[ChatMessage]
+    model: Optional[str] = None
+    provider: Optional[str] = Field(default="auto", description="auto, puter, phi3")
+    mode: Optional[str] = Field(default="balanced", description="fast, balanced, quality, thinking")
+    temperature: Optional[float] = Field(default=None, ge=0, le=2)
+    max_tokens: Optional[int] = Field(default=4096, ge=1, le=16384)
+    stream: bool = False
+    json_mode: bool = False
+
+
+class ChatResponse(BaseModel):
+    """Chat completion response."""
+    content: str
+    provider: str
+    model: str
+    thinking: Optional[str] = None
+    latency_ms: int
+    tokens_used: int
+    success: bool
+
+
+class GenerateWebsiteRequest(BaseModel):
+    """Website generation request."""
+    prompt: str = Field(..., min_length=10, max_length=2000)
+    mode: Optional[str] = Field(default="full", description="quick or full")
+    provider: Optional[str] = Field(default="auto")
+    return_thinking: bool = Field(default=False)
+
+
+class GenerateWebsiteResponse(BaseModel):
+    """Website generation response."""
+    html: str
+    thinking_chain: Optional[str] = None
+    steps: Optional[List[Dict[str, Any]]] = None
+    total_duration_ms: int
+    total_tokens: int
+    success: bool
+    error: Optional[str] = None
+
+
+class AIStatusResponse(BaseModel):
+    """AI engine status."""
+    initialized: bool
+    providers: Dict[str, Any]
+    stats: Dict[str, int]
+
+
+# =============================================================================
+# Endpoints
+# =============================================================================
+
+@router.get("/status", response_model=AIStatusResponse)
+async def get_ai_status():
+    """Get AI engine status and available providers."""
+    try:
+        engine = await get_ai_engine()
+        status = engine.get_status()
+        return AIStatusResponse(**status)
+    except Exception as e:
+        logger.error("ai_status_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/chat", response_model=ChatResponse)
+async def chat_completion(request: ChatRequest):
+    """
+    Chat completion with hybrid AI.
+    
+    Uses Puter.js (cloud) as primary with Phi-3 (local) as fallback.
+    """
+    try:
+        engine = await get_ai_engine()
+        
+        # Parse provider
+        provider = {
+            "auto": AIProvider.AUTO,
+            "puter": AIProvider.PUTER,
+            "phi3": AIProvider.PHI3_LOCAL,
+        }.get(request.provider, AIProvider.AUTO)
+        
+        # Parse mode
+        mode = {
+            "fast": AIMode.FAST,
+            "balanced": AIMode.BALANCED,
+            "quality": AIMode.QUALITY,
+            "thinking": AIMode.THINKING,
+        }.get(request.mode, AIMode.BALANCED)
+        
+        # Build prompt from messages
+        system_prompt = None
+        prompt_parts = []
+        
+        for msg in request.messages:
+            if msg.role == "system":
+                system_prompt = msg.content
+            elif msg.role == "user":
+                prompt_parts.append(msg.content)
+            elif msg.role == "assistant":
+                prompt_parts.append(f"Assistant: {msg.content}")
+        
+        prompt = "\n\n".join(prompt_parts)
+        
+        # Generate
+        response = await engine.generate(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            mode=mode,
+            provider=provider,
+            json_mode=request.json_mode,
+            max_tokens=request.max_tokens,
+            temperature=request.temperature,
+        )
+        
+        return ChatResponse(
+            content=response.content,
+            provider=response.provider.value,
+            model=response.model,
+            thinking=response.thinking,
+            latency_ms=response.latency_ms,
+            tokens_used=response.tokens_used,
+            success=response.success,
+        )
+        
+    except Exception as e:
+        logger.error("chat_completion_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/chat/stream")
+async def chat_completion_stream(request: ChatRequest):
+    """
+    Streaming chat completion.
+    
+    Returns Server-Sent Events with response chunks.
+    """
+    async def generate():
+        try:
+            engine = await get_ai_engine()
+            
+            # Build prompt
+            system_prompt = None
+            prompt = ""
+            
+            for msg in request.messages:
+                if msg.role == "system":
+                    system_prompt = msg.content
+                elif msg.role == "user":
+                    prompt = msg.content
+            
+            # Parse provider
+            provider = {
+                "auto": AIProvider.AUTO,
+                "puter": AIProvider.PUTER,
+                "phi3": AIProvider.PHI3_LOCAL,
+            }.get(request.provider, AIProvider.AUTO)
+            
+            async for chunk in engine.stream_generate(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                provider=provider,
+            ):
+                yield f"data: {json.dumps({'content': chunk})}\n\n"
+            
+            yield "data: [DONE]\n\n"
+            
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+    
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
+
+
+@router.post("/generate/website", response_model=GenerateWebsiteResponse)
+async def generate_website(request: GenerateWebsiteRequest):
+    """
+    Generate a complete website using deep thinking.
+    
+    This is the core website builder endpoint that uses multi-step
+    reasoning to create high-quality websites.
+    """
+    try:
+        engine = await get_ai_engine()
+        thinking_engine = DeepThinkingEngine(engine)
+        
+        # Choose generation mode
+        if request.mode == "quick":
+            result = await thinking_engine.quick_generate(request.prompt)
+        else:
+            result = await thinking_engine.think(request.prompt)
+        
+        # Extract HTML from final output
+        html = ""
+        if result.success and result.final_output:
+            if isinstance(result.final_output, str):
+                html = result.final_output
+            elif isinstance(result.final_output, dict):
+                html = result.final_output.get("html", str(result.final_output))
+        
+        return GenerateWebsiteResponse(
+            html=html,
+            thinking_chain=result.thinking_chain if request.return_thinking else None,
+            steps=[s.to_dict() for s in result.steps] if request.return_thinking else None,
+            total_duration_ms=result.total_duration_ms,
+            total_tokens=result.total_tokens,
+            success=result.success,
+            error=result.error,
+        )
+        
+    except Exception as e:
+        logger.error("generate_website_error", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/generate/website/stream")
+async def generate_website_stream(request: GenerateWebsiteRequest):
+    """
+    Stream website generation with thinking steps.
+    
+    Returns Server-Sent Events with progress updates.
+    """
+    async def generate():
+        try:
+            engine = await get_ai_engine()
+            thinking_engine = DeepThinkingEngine(engine)
+            
+            # Define phases based on mode
+            if request.mode == "quick":
+                phases = [
+                    ThinkingPhase.UNDERSTAND,
+                    ThinkingPhase.ARCHITECT,
+                    ThinkingPhase.DESIGN,
+                    ThinkingPhase.IMPLEMENT,
+                ]
+            else:
+                phases = [
+                    ThinkingPhase.UNDERSTAND,
+                    ThinkingPhase.RESEARCH,
+                    ThinkingPhase.IDEATE,
+                    ThinkingPhase.ARCHITECT,
+                    ThinkingPhase.DESIGN,
+                    ThinkingPhase.IMPLEMENT,
+                    ThinkingPhase.VERIFY,
+                    ThinkingPhase.REFINE,
+                ]
+            
+            # Send phase list
+            yield f"data: {json.dumps({'type': 'phases', 'phases': [p.value for p in phases]})}\n\n"
+            
+            # Execute phases and stream progress
+            context = {"original_prompt": request.prompt}
+            
+            for phase in phases:
+                # Send phase start
+                yield f"data: {json.dumps({'type': 'phase_start', 'phase': phase.value})}\n\n"
+                
+                # Execute phase
+                step = await thinking_engine._execute_phase(
+                    phase=phase,
+                    prompt=request.prompt,
+                    context=context,
+                    verbose=False,
+                )
+                
+                # Add to context
+                context[phase.value] = step.output
+                
+                # Send phase complete
+                yield f"data: {json.dumps({'type': 'phase_complete', 'phase': phase.value, 'duration_ms': step.duration_ms, 'confidence': step.confidence})}\n\n"
+                
+                # Send reasoning if available
+                if step.reasoning:
+                    yield f"data: {json.dumps({'type': 'reasoning', 'phase': phase.value, 'content': step.reasoning[:500]})}\n\n"
+            
+            # Send final HTML
+            final_html = context.get("refine", context.get("implement", ""))
+            yield f"data: {json.dumps({'type': 'complete', 'html': final_html})}\n\n"
+            yield "data: [DONE]\n\n"
+            
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
+    
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
+
+
+@router.get("/models")
+async def list_models():
+    """List available AI models."""
+    return {
+        "cloud_models": [
+            {"id": "gpt-4o-mini", "name": "GPT-4o Mini", "provider": "puter", "speed": "fast"},
+            {"id": "gpt-4o", "name": "GPT-4o", "provider": "puter", "speed": "medium"},
+            {"id": "claude-3-5-sonnet", "name": "Claude 3.5 Sonnet", "provider": "puter", "speed": "medium"},
+            {"id": "claude-3-haiku", "name": "Claude 3 Haiku", "provider": "puter", "speed": "fast"},
+            {"id": "llama-3.1-405b", "name": "Llama 3.1 405B", "provider": "puter", "speed": "slow"},
+            {"id": "deepseek-reasoner", "name": "DeepSeek Reasoner", "provider": "puter", "speed": "medium", "thinking": True},
+        ],
+        "local_models": [
+            {"id": "phi-3-mini", "name": "Phi-3 Mini (4K)", "provider": "phi3", "speed": "medium", "offline": True},
+        ]
+    }

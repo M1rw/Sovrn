@@ -1,0 +1,21 @@
+# =============================================================================
+# SOVRN Worker Dependencies
+# =============================================================================
+
+# Core
+asyncio==3.4.3
+asyncpg==0.29.0
+sqlalchemy==2.0.25
+pydantic==2.5.3
+pydantic-settings==2.1.0
+
+# HTTP Client
+httpx==0.26.0
+
+# Job Queue
+redis==5.0.1
+
+# Utilities
+structlog==24.1.0
+tenacity==8.2.3
+python-dateutil==2.8.2

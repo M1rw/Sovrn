@@ -1,0 +1,123 @@
+# =============================================================================
+# SOVRN Docker Compose - Development Override
+# =============================================================================
+# Use with: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+# =============================================================================
+
+version: "3.9"
+
+services:
+  # ---------------------------------------------------------------------------
+  # Development overrides
+  # ---------------------------------------------------------------------------
+  
+  caddy:
+    volumes:
+      - ./infra/caddy/Caddyfile.dev:/etc/caddy/Caddyfile:ro
+    ports:
+      - "80:80"
+      # No HTTPS in dev
+
+  db:
+    ports:
+      - "5432:5432"  # Expose for local tools
+    environment:
+      POSTGRES_PASSWORD: devpassword
+
+  api:
+    build:
+      target: development
+    volumes:
+      - ./services/api:/app
+      - ./packages:/packages:ro
+    environment:
+      - DEBUG=true
+      - LOG_LEVEL=debug
+      - HOT_RELOAD=true
+      - DATABASE_URL=postgresql://sovrn:devpassword@db:5432/sovrn
+      - JWT_SECRET=dev_secret_do_not_use_in_production
+    ports:
+      - "8000:8000"  # Direct access for debugging
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  web:
+    build:
+      target: development
+    volumes:
+      - ./apps/web:/app
+      - ./packages:/packages:ro
+      - /app/node_modules
+      - /app/.next
+    environment:
+      - NODE_ENV=development
+      - NEXTAUTH_SECRET=dev_secret_do_not_use_in_production
+    ports:
+      - "3000:3000"  # Direct access
+    command: ["npm", "run", "dev"]
+
+  infer:
+    environment:
+      - MODEL_PATH=/models/phi-3-mini-4bit.gguf
+      - CONTEXT_SIZE=4096
+      - THREADS=6
+    ports:
+      - "8080:8080"  # Direct access for testing
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2"
+
+  worker:
+    volumes:
+      - ./services/worker:/app
+      - ./packages:/packages:ro
+    environment:
+      - DEBUG=true
+      - LOG_LEVEL=debug
+      - DATABASE_URL=postgresql://sovrn:devpassword@db:5432/sovrn
+
+  redis:
+    ports:
+      - "6379:6379"  # Expose for local tools
+
+  router:
+    ports:
+      - "7070:7070"
+    environment:
+      - SOVRN_ROUTER_PORT=7070
+      - MOCK_PUTER=${MOCK_PUTER:-true}
+      - MOCK_PUTER_DOWN=${MOCK_PUTER_DOWN:-false}
+
+  # ---------------------------------------------------------------------------
+  # Additional dev services
+  # ---------------------------------------------------------------------------
+  
+  # pgAdmin for database management
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: sovrn-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@sovrn.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "5050:80"
+    networks:
+      - sovrn-network
+    depends_on:
+      - db
+    profiles:
+      - tools
+
+  # Mailhog for email testing
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: sovrn-mailhog
+    ports:
+      - "1025:1025"  # SMTP
+      - "8025:8025"  # Web UI
+    networks:
+      - sovrn-network
+    profiles:
+      - tools
