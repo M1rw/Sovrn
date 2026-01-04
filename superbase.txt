@@ -1,0 +1,3 @@
+password: P8o86tayzqyYQ8Fk
+
+connect: postgresql://postgres:[YOUR-PASSWORD]@db.nqqlaxkfchftxtgruply.supabase.co:5432/postgres

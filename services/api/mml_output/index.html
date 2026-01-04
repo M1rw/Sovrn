@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FORMA STUDIO | Design With Purpose</title>
+    <meta name="description" content="Strategy, design, and technology for brands that want to lead, not follow.">
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+    
+    <!-- Styles -->
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- Custom Cursor -->
+    <div class="cursor"></div><div class="cursor-follower"></div>
+    
+    <!-- Grid Overlay (Debug) -->
+    <div class="grid-overlay">
+        <div class="grid-lines"></div>
+    </div>
+    
+    <!-- Main Container -->
+    <div class="main-container">
+        
+        <!-- Sidebar Navigation -->
+        <nav class="sidebar" role="navigation" aria-label="Main navigation">
+            <div class="nav-header">
+                <div class="logo">
+                    <span class="logo-mark">◆</span>
+                    <div class="logo-text">
+                        FORMA<br>STUDIO
+                    </div>
+                </div>
+                <div class="studio-info">
+                    <span>EST. 2020</span>
+                    <span>ZÜRICH, CH</span>
+                </div>
+            </div>
+            
+            <div class="nav-links">
+                <a href="#home" class="nav-link active">HOME</a>
+                    <a href="#services" class="nav-link ">SERVICES</a>
+                    <a href="#work" class="nav-link ">WORK</a>
+                    <a href="#contact" class="nav-link ">CONTACT</a>
+                    
+            </div>
+            
+            <div class="nav-footer">
+                <div class="status-indicator">
+                    <span class="status-dot"></span>
+                    <span>AVAILABLE FOR PROJECTS</span>
+                </div>
+                <div class="meta-info">
+                    <span id="current-time">00:00:00</span>
+                    <span>CET</span>
+                </div>
+            </div>
+        </nav>
+        
+        <!-- Main Content -->
+        <main class="content" role="main">
+            
+            <!-- Hero Section -->
+            <section id="home" class="section hero-section">
+                <div class="hero-grid">
+                    <div class="hero-content">
+                        <div class="manifesto">
+                            <span class="manifesto-label">CREATIVE STUDIO</span>
+                            <h1 class="hero-title">WE MAKE BRANDS <span class="accent">MATTER</span></h1>
+                            <p class="hero-subtitle">Strategy, design, and technology for brands that want to lead, not follow.</p>
+                            <div class="hero-actions">
+                                <a href="#projects" class="scroll-indicator">SEE OUR WORK ↓</a>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="hero-image-container">
+                        <div class="hero-image">
+                            <div class="image-placeholder concrete-texture"></div>
+                            <div class="image-overlay">
+                                <span>FEATURED PROJECT</span>
+                                <span>2024</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+            
+            
+            <!-- SERVICES Section -->
+            <section id="services" class="section grid-section">
+                
+            <div class="section-header">
+                <span class="section-number">02</span>
+                <h2 class="section-title">SERVICES</h2>
+            </div>
+                
+            <div class="publications-grid">
+                
+                <article class="publication-item">
+                    <div class="pub-image">
+                        <div class="image-placeholder"></div>
+                    </div>
+                    <h3 class="pub-title">BRAND STRATEGY</h3>
+                    <span class="pub-details"> · </span>
+                </article>
+                <article class="publication-item">
+                    <div class="pub-image">
+                        <div class="image-placeholder"></div>
+                    </div>
+                    <h3 class="pub-title">DIGITAL DESIGN</h3>
+                    <span class="pub-details"> · </span>
+                </article>
+                <article class="publication-item">
+                    <div class="pub-image">
+                        <div class="image-placeholder"></div>
+                    </div>
+                    <h3 class="pub-title">CREATIVE DIRECTION</h3>
+                    <span class="pub-details"> · </span>
+                </article>
+                <article class="publication-item">
+                    <div class="pub-image">
+                        <div class="image-placeholder"></div>
+                    </div>
+                    <h3 class="pub-title">DEVELOPMENT</h3>
+                    <span class="pub-details"> · </span>
+                </article>
+            </div>
+            </section>
+
+            <!-- SELECTED WORK Section -->
+            <section id="work" class="section gallery-section">
+                
+            <div class="section-header">
+                <span class="section-number">03</span>
+                <h2 class="section-title">SELECTED WORK</h2>
+            </div>
+                
+            
+            <div class="projects-container grid-view">
+                
+                <article class="project-card" data-project="1">
+                    <div class="project-card-image">
+                        <div class="image-placeholder concrete-texture"></div>
+                    </div>
+                    <div class="project-card-overlay">
+                        <span class="project-card-number">01</span>
+                        <h3 class="project-card-title">BRAND REFRESH</h3>
+                        <span class="project-card-meta">Branding · 2024</span>
+                    </div>
+                </article>
+                <article class="project-card" data-project="2">
+                    <div class="project-card-image">
+                        <div class="image-placeholder concrete-texture"></div>
+                    </div>
+                    <div class="project-card-overlay">
+                        <span class="project-card-number">02</span>
+                        <h3 class="project-card-title">PRODUCT LAUNCH</h3>
+                        <span class="project-card-meta">Campaign · 2024</span>
+                    </div>
+                </article>
+                <article class="project-card" data-project="3">
+                    <div class="project-card-image">
+                        <div class="image-placeholder concrete-texture"></div>
+                    </div>
+                    <div class="project-card-overlay">
+                        <span class="project-card-number">03</span>
+                        <h3 class="project-card-title">WEB PLATFORM</h3>
+                        <span class="project-card-meta">Development · 2023</span>
+                    </div>
+                </article>
+            </div>
+            </section>
+
+            <!-- START A PROJECT Section -->
+            <section id="contact" class="section form-section">
+                
+            <div class="section-header">
+                <span class="section-number">04</span>
+                <h2 class="section-title">START A PROJECT</h2>
+            </div>
+                
+            <div class="contact-grid">
+                <div class="contact-info">
+                    <h3 class="contact-heading">Have a project in mind?</h3>
+                    <div class="contact-details">
+                        <div class="contact-block">
+                            <span class="contact-label">EMAIL</span>
+                            <a href="mailto:hello@formastudio.com" class="contact-link">hello@formastudio.com</a>
+                        </div>
+                        
+                        
+                    </div>
+                </div>
+                <div class="contact-form-container">
+                    <form class="contact-form" method="POST">
+                        
+                    <div class="form-group">
+                        <label class="form-label" for="name">NAME</label>
+                        <input class="form-input" type="text" id="name" name="name" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="email">EMAIL</label>
+                        <input class="form-input" type="email" id="email" name="email" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="budget">BUDGET</label>
+                        <input class="form-input" type="text" id="budget" name="budget" required>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" for="message">MESSAGE</label>
+                        <textarea class="form-input form-textarea" id="message" name="message" rows="5" required></textarea>
+                    </div>
+                        <button type="submit" class="form-submit">
+                            <span>SEND MESSAGE</span>
+                            <span class="submit-arrow">→</span>
+                        </button>
+                    </form>
+                </div>
+            </div>
+            
+            <!-- Footer -->
+            <footer class="footer">
+                <span class="copyright">© 2026 All rights reserved.</span>
+                <div class="footer-center">
+                    <a href="#" class="footer-link">Privacy</a>
+                    <a href="#" class="footer-link">Terms</a>
+                    <a href="#" class="footer-link">Instagram</a>
+                    <a href="#" class="footer-link">LinkedIn</a>
+                </div>
+                <span class="awards">Awwwards SOTD · FWA</span>
+            </footer>
+            </section>
+
+            
+        </main>
+    </div>
+    
+    <!-- Scripts -->
+    <script src="script.js"></script>
+</body>
+</html>
