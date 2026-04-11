@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Create A Simple Landing Page</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --bg: #0a0a0a;
+            --fg: #fafafa;
+            --muted: #71717a;
+            --accent: #3b82f6;
+            --card: #18181b;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--fg);
+            min-height: 100vh;
+        }
+        nav {
+            position: sticky;
+            top: 0;
+            background: rgba(10, 10, 10, 0.8);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        nav .logo {
+            font-weight: 600;
+            font-size: 1.25rem;
+        }
+        nav .links {
+            display: flex;
+            gap: 2rem;
+        }
+        nav a {
+            color: var(--muted);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+        nav a:hover {
+            color: var(--fg);
+        }
+        .hero {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 8rem 2rem;
+            text-align: center;
+        }
+        .hero h1 {
+            font-size: 3.5rem;
+            font-weight: 700;
+            line-height: 1.1;
+            margin-bottom: 1.5rem;
+            background: linear-gradient(135deg, #fff 0%, #71717a 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .hero p {
+            font-size: 1.25rem;
+            color: var(--muted);
+            margin-bottom: 2rem;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        .hero button {
+            background: var(--fg);
+            color: var(--bg);
+            border: none;
+            padding: 0.875rem 2rem;
+            border-radius: 0.5rem;
+            font-size: 1rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: transform 0.2s, opacity 0.2s;
+        }
+        .hero button:hover {
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }
+        .features {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 4rem 2rem;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+        }
+        .card {
+            background: var(--card);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 1rem;
+            padding: 2rem;
+            transition: transform 0.2s, border-color 0.2s;
+        }
+        .card:hover {
+            transform: translateY(-4px);
+            border-color: rgba(255,255,255,0.2);
+        }
+        .card .icon {
+            width: 3rem;
+            height: 3rem;
+            background: rgba(59, 130, 246, 0.2);
+            border-radius: 0.75rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 1rem;
+            font-size: 1.5rem;
+        }
+        .card h3 {
+            font-size: 1.125rem;
+            margin-bottom: 0.5rem;
+        }
+        .card p {
+            color: var(--muted);
+            font-size: 0.875rem;
+            line-height: 1.6;
+        }
+        footer {
+            border-top: 1px solid rgba(255,255,255,0.1);
+            padding: 2rem;
+            text-align: center;
+            color: var(--muted);
+            font-size: 0.875rem;
+        }
+    </style>
+</head>
+<body>
+    <nav>
+        <div class="logo">Create A Simple Landing Page</div>
+        <div class="links">
+            <a href="#">Home</a>
+            <a href="#">Features</a>
+            <a href="#">About</a>
+            <a href="#">Contact</a>
+        </div>
+    </nav>
+    
+    <section class="hero">
+        <h1>Create A Simple Landing Page</h1>
+        <p>Welcome to our platform. We're building something amazing that will transform the way you work.</p>
+        <button>Get Started</button>
+    </section>
+    
+    <section class="features">
+        <div class="card">
+            <div class="icon">⚡</div>
+            <h3>Lightning Fast</h3>
+            <p>Built for performance with optimized code and modern architecture.</p>
+        </div>
+        <div class="card">
+            <div class="icon">🛡️</div>
+            <h3>Secure by Design</h3>
+            <p>Enterprise-grade security with end-to-end encryption.</p>
+        </div>
+        <div class="card">
+            <div class="icon">🎨</div>
+            <h3>Beautiful UI</h3>
+            <p>Carefully crafted interface with attention to every detail.</p>
+        </div>
+    </section>
+    
+    <footer>
+        <p>&copy; 2025 Create A Simple Landing Page. All rights reserved.</p>
+    </footer>
+</body>
+</html>

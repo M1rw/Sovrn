@@ -1,133 +1,53 @@
-# =============================================================================
-# SOVRN .gitignore
-# =============================================================================
+# Examples
 
-# -----------------------------------------------------------------------------
-# Environment & Secrets
-# -----------------------------------------------------------------------------
-.env
-.env.local
-.env.*.local
-*.pem
-*.key
-secrets/
+    Input:
+    ### Added files:
+    [src/main.py, README.md, config.json]
 
-# -----------------------------------------------------------------------------
-# AI Models (large files - download separately)
-# -----------------------------------------------------------------------------
-models/*.gguf
-models/*.bin
-models/*.safetensors
-models/*.pt
-models/*.onnx
-!models/.gitkeep
-!models/README.md
+    ### Deleted files:
+    [old/unused.py]
+    ### Modified files:
+    [utils.py]
+    ###current .gitignore Content
+    (empty)
+    Expected Output:
+    (empty — output nothing)
 
-# -----------------------------------------------------------------------------
-# Dependencies
-# -----------------------------------------------------------------------------
-node_modules/
-__pycache__/
-*.py[cod]
-*$py.class
-.Python
-*.so
-.venv/
-venv/
-ENV/
-env/
-.eggs/
-*.egg-info/
-*.egg
+# Example 2 (Project with artifacts):
+Input:
+### Added files:
+[pycache/main.cpython-310.pyc, dist/app.js, .env.local, .vscode/settings.json
 
-# -----------------------------------------------------------------------------
-# Build Outputs
-# -----------------------------------------------------------------------------
-dist/
-build/
-.next/
-out/
-*.js.map
-*.d.ts
-!packages/contracts/dist/
+### Deleted files:
+    []
 
-# -----------------------------------------------------------------------------
-# IDE & Editors
-# -----------------------------------------------------------------------------
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-.project
-.classpath
-.settings/
-
-# -----------------------------------------------------------------------------
-# OS Files
-# -----------------------------------------------------------------------------
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-desktop.ini
-
-# -----------------------------------------------------------------------------
-# Logs & Debugging
-# -----------------------------------------------------------------------------
-logs/
+### Modified files:
+[]
+### current .gitignore Content
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-
-# -----------------------------------------------------------------------------
-# Testing
-# -----------------------------------------------------------------------------
-coverage/
-.coverage
-htmlcov/
-.pytest_cache/
-.hypothesis/
-.tox/
-.nox/
-
-# -----------------------------------------------------------------------------
-# Generated Artifacts
-# -----------------------------------------------------------------------------
-var/
-artifacts/
-tmp/
-temp/
-*.tmp
-
-# -----------------------------------------------------------------------------
-# Database
-# -----------------------------------------------------------------------------
-*.db
-*.sqlite
-*.sqlite3
-data/postgres/
-
-# -----------------------------------------------------------------------------
-# Docker
-# -----------------------------------------------------------------------------
-docker-compose.override.yml
-
-# -----------------------------------------------------------------------------
-# Backups
-# -----------------------------------------------------------------------------
-backups/
-*.sql.gz
-*.tar.gz
-
-# -----------------------------------------------------------------------------
-# Misc
-# -----------------------------------------------------------------------------
-.cache/
-*.bak
-*.backup
+Expected Output:
+    #Compiled and build artifacts
+    *.pyc
+    pycache/
+    *.o
+    *.obj
+    dist/
+    build/
+    #Dependencies
+    .venv/
+    venv/
+    node_modules/
+    #Logs and temp files
+    *.log
+    *.tmp
+    *.swp
+    #Environment
+    .env
+    .env.local
+    .env.
+    #Editors
+    .vscode/
+    .idea/
+    #Original rules preserved
+    *.log
+Final reminder: Output ONLY the .gitignore content. If nothing should be ignored, output NOTHING.
