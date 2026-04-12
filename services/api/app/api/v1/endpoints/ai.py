@@ -5,12 +5,14 @@
 AI-powered generation endpoints using hybrid AI architecture.
 """
 
+import asyncio
+import json
+import time
 from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 import structlog
-import json
 
 from app.lib.ai.providers import HybridAIEngine, AIProvider, AIResponse, get_ai_engine, AIMode
 from app.lib.ai.deep_thinking import DeepThinkingEngine, ThinkingPhase
@@ -18,6 +20,8 @@ from app.lib.ai.deep_thinking import DeepThinkingEngine, ThinkingPhase
 logger = structlog.get_logger()
 
 router = APIRouter()
+
+CHAT_TIMEOUT_SECONDS = 12
 
 
 # =============================================================================
@@ -37,7 +41,7 @@ class ChatRequest(BaseModel):
     provider: Optional[str] = Field(default="auto", description="auto, puter, phi3")
     mode: Optional[str] = Field(default="balanced", description="fast, balanced, quality, thinking")
     temperature: Optional[float] = Field(default=None, ge=0, le=2)
-    max_tokens: Optional[int] = Field(default=4096, ge=1, le=16384)
+    max_tokens: Optional[int] = Field(default=512, ge=1, le=4096)
     stream: bool = False
     json_mode: bool = False
 
@@ -79,6 +83,42 @@ class AIStatusResponse(BaseModel):
     stats: Dict[str, int]
 
 
+def _latest_user_message(request: ChatRequest) -> str:
+    for message in reversed(request.messages):
+        if message.role == "user":
+            return message.content.strip()
+    return ""
+
+
+def _build_chat_fallback(request: ChatRequest, reason: Optional[str] = None) -> ChatResponse:
+    user_message = _latest_user_message(request)
+    lowered = user_message.lower()
+
+    if any(keyword in lowered for keyword in ("website", "landing", "portfolio", "shop", "dashboard", "app")):
+        content = (
+            "I’m loading a fallback response right now, but I can still help you move forward. "
+            "Tell me the site type, tone, colors, and the sections you want, and I’ll turn it into a clean build prompt."
+        )
+    else:
+        content = (
+            "I’m temporarily using a local fallback while the model warms up. "
+            "Send me a short brief and I’ll help structure it into something the builder can use."
+        )
+
+    if reason:
+        logger.warning("ai_chat_fallback", reason=reason)
+
+    return ChatResponse(
+        content=content,
+        provider="fallback",
+        model="sovrn-fallback",
+        thinking=None,
+        latency_ms=0,
+        tokens_used=0,
+        success=True,
+    )
+
+
 # =============================================================================
 # Endpoints
 # =============================================================================
@@ -103,7 +143,9 @@ async def chat_completion(request: ChatRequest):
     Uses Puter.js (cloud) as primary with Phi-3 (local) as fallback.
     """
     try:
-        engine = await get_ai_engine()
+        start_time = time.monotonic()
+
+        engine = await asyncio.wait_for(get_ai_engine(), timeout=CHAT_TIMEOUT_SECONDS)
         
         # Parse provider
         provider = {
@@ -135,29 +177,42 @@ async def chat_completion(request: ChatRequest):
         prompt = "\n\n".join(prompt_parts)
         
         # Generate
-        response = await engine.generate(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            mode=mode,
-            provider=provider,
-            json_mode=request.json_mode,
-            max_tokens=request.max_tokens,
-            temperature=request.temperature,
+        response = await asyncio.wait_for(
+            engine.generate(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                mode=mode,
+                provider=provider,
+                json_mode=request.json_mode,
+                max_tokens=request.max_tokens,
+                temperature=request.temperature,
+            ),
+            timeout=CHAT_TIMEOUT_SECONDS,
         )
+
+        latency_ms = int((time.monotonic() - start_time) * 1000)
+
+        if not response.success or not response.content.strip():
+            fallback = _build_chat_fallback(request, response.error or "empty_ai_response")
+            fallback.latency_ms = latency_ms
+            return fallback
         
         return ChatResponse(
             content=response.content,
             provider=response.provider.value,
             model=response.model,
             thinking=response.thinking,
-            latency_ms=response.latency_ms,
+            latency_ms=latency_ms or response.latency_ms,
             tokens_used=response.tokens_used,
             success=response.success,
         )
+
+    except asyncio.TimeoutError:
+        return _build_chat_fallback(request, "timeout")
         
     except Exception as e:
         logger.error("chat_completion_error", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        return _build_chat_fallback(request, str(e))
 
 
 @router.post("/chat/stream")

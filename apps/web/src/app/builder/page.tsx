@@ -1,8 +1,11 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { 
   Send, 
+  Bot,
+  Brain,
+  Briefcase,
   Code2, 
   Eye, 
   Download, 
@@ -20,6 +23,11 @@ import {
   RotateCcw,
   PanelRightClose,
   PanelRight,
+  PanelLeftClose,
+  PanelLeftOpen,
+  FolderPlus,
+  Gamepad2,
+  Music2,
   Plus,
   Search,
   Globe,
@@ -28,8 +36,6 @@ import {
   Zap,
   MessageSquare,
   Settings,
-  Menu,
-  X
 } from 'lucide-react';
 
 type ViewMode = 'preview' | 'code';
@@ -143,6 +149,8 @@ export default function BuilderPage() {
   const [showPreview, setShowPreview] = useState(true);
   const [mounted, setMounted] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedChatId, setSelectedChatId] = useState<string | null>('1');
   const [greeting, setGreeting] = useState('Hello');
   const [taskSteps, setTaskSteps] = useState<TaskStep[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -171,6 +179,14 @@ export default function BuilderPage() {
     { icon: Zap, label: 'SaaS', description: 'SaaS product page' },
   ];
 
+  const projectCollections = [
+    { id: 'brainstorms', label: 'Brainstorms', icon: Brain, tone: 'text-pink-400' },
+    { id: 'smartvision', label: 'SmartVision', icon: Briefcase, tone: 'text-zinc-300' },
+    { id: 'music-song', label: 'Music & Song', icon: Music2, tone: 'text-red-400' },
+    { id: 'programming', label: 'Programming', icon: Code2, tone: 'text-emerald-400' },
+    { id: 'roblox', label: 'Roblox', icon: Gamepad2, tone: 'text-sky-400' },
+  ];
+
   useEffect(() => {
     setMounted(true);
     setGreeting(getGreeting());
@@ -186,6 +202,43 @@ export default function BuilderPage() {
       inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 150)}px`;
     }
   }, [input]);
+
+  const filteredChats = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return chatHistory;
+    return chatHistory.filter(
+      (chat) =>
+        chat.title.toLowerCase().includes(query) ||
+        chat.preview.toLowerCase().includes(query)
+    );
+  }, [chatHistory, searchQuery]);
+
+  const groupedChats = useMemo(() => {
+    const now = Date.now();
+    const oneDay = 24 * 60 * 60 * 1000;
+
+    const groups: Record<string, ChatHistory[]> = {
+      Today: [],
+      Yesterday: [],
+      'Previous 7 Days': [],
+      Older: [],
+    };
+
+    for (const chat of filteredChats) {
+      const diff = now - chat.timestamp.getTime();
+      if (diff < oneDay) {
+        groups.Today.push(chat);
+      } else if (diff < oneDay * 2) {
+        groups.Yesterday.push(chat);
+      } else if (diff < oneDay * 7) {
+        groups['Previous 7 Days'].push(chat);
+      } else {
+        groups.Older.push(chat);
+      }
+    }
+
+    return groups;
+  }, [filteredChats]);
 
   const buildConversationContext = () => {
     return messages.map(m => ({
@@ -228,7 +281,8 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
             },
             ...conversationHistory
           ],
-          temperature: 0.7
+          temperature: 0.7,
+          max_tokens: 512
         })
       });
 
@@ -452,6 +506,7 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
     setGeneratedFiles([]);
     setSelectedFile('index.html');
     setMessages([]);
+    setSelectedChatId(null);
   };
 
   const isNewChat = messages.length === 0;
@@ -463,112 +518,170 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
       <style dangerouslySetInnerHTML={{ __html: styles }} />
       
       {/* Sidebar */}
-      <aside className={`${sidebarOpen ? 'w-64' : 'w-0'} flex-shrink-0 transition-all duration-300 overflow-hidden ${
-        isDark ? 'bg-[#111111]' : 'bg-white'
+      <aside className={`${sidebarOpen ? 'w-[270px]' : 'w-[62px]'} flex-shrink-0 transition-all duration-300 ease-out overflow-hidden ${
+        isDark ? 'bg-[#101113]' : 'bg-white'
       } border-r ${isDark ? 'border-white/[0.06]' : 'border-black/[0.06]'}`}>
-        <div className="w-64 h-full flex flex-col">
-          {/* Sidebar Header */}
-          <div className="p-4 flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${
-                isDark 
-                  ? 'bg-gradient-to-br from-white/10 to-white/5' 
-                  : 'bg-gradient-to-br from-black/5 to-black/10'
-              }`}>
-                <Sparkles className={`w-4 h-4 ${isDark ? 'text-white' : 'text-black'}`} />
-              </div>
-              <span className={`font-semibold text-[15px] ${isDark ? 'text-white' : 'text-black'}`}>
-                SOVRN
-              </span>
-            </div>
-          </div>
-
-          {/* New Chat Button */}
-          <div className="px-3 mb-2">
+        <div className="w-full h-full flex flex-col">
+          <div className={`px-3 py-3 ${sidebarOpen ? 'space-y-1.5' : 'space-y-1'}`}>
             <button
               onClick={startNewChat}
-              className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                isDark 
-                  ? 'bg-white/[0.06] hover:bg-white/[0.1] text-white' 
-                  : 'bg-black/[0.04] hover:bg-black/[0.08] text-black'
+              className={`w-full flex items-center ${sidebarOpen ? 'justify-start gap-2.5 px-2.5' : 'justify-center px-0'} h-9 rounded-lg text-sm font-medium transition-all duration-200 ${
+                isDark ? 'text-white hover:bg-white/[0.08]' : 'text-black hover:bg-black/[0.06]'
               }`}
+              title="New chat"
             >
               <Plus className="w-4 h-4" />
-              New Chat
+              {sidebarOpen && 'New chat'}
+            </button>
+
+            <div className={`w-full flex items-center ${sidebarOpen ? 'gap-2 px-2.5' : 'justify-center px-0'} h-9 rounded-lg transition-all duration-200 ${
+              isDark ? 'text-white/85 hover:bg-white/[0.06]' : 'text-black/85 hover:bg-black/[0.04]'
+            }`}>
+              <Search className="w-4 h-4 flex-shrink-0" />
+              {sidebarOpen && (
+                <input
+                  type="text"
+                  placeholder="Search chats"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className={`w-full min-w-0 bg-transparent border-0 ring-0 outline-none focus:outline-none focus:ring-0 focus:border-0 appearance-none text-[13px] leading-5 ${
+                    isDark ? 'text-white placeholder:text-white/30' : 'text-black placeholder:text-black/35'
+                  }`}
+                />
+              )}
+            </div>
+
+            <button
+              className={`w-full flex items-center ${sidebarOpen ? 'justify-start gap-2.5 px-2.5' : 'justify-center px-0'} h-9 rounded-lg text-sm transition-all duration-200 ${
+                isDark ? 'text-white/85 hover:bg-white/[0.06]' : 'text-black/85 hover:bg-black/[0.04]'
+              }`}
+              title="Codex"
+            >
+              <Bot className="w-4 h-4" />
+              {sidebarOpen && 'Codex'}
+            </button>
+
+            <button
+              className={`w-full flex items-center ${sidebarOpen ? 'justify-start gap-2.5 px-2.5' : 'justify-center px-0'} h-9 rounded-lg text-sm transition-all duration-200 ${
+                isDark ? 'text-white/70 hover:bg-white/[0.06]' : 'text-black/70 hover:bg-black/[0.04]'
+              }`}
+              title="More"
+            >
+              <MoreHorizontal className="w-4 h-4" />
+              {sidebarOpen && 'More'}
             </button>
           </div>
 
-          {/* Search */}
-          <div className="px-3 mb-4">
-            <div className={`flex items-center gap-2 px-3 py-2 rounded-xl ${
-              isDark ? 'bg-white/[0.04]' : 'bg-black/[0.02]'
-            }`}>
-              <Search className={`w-4 h-4 ${isDark ? 'text-white/30' : 'text-black/30'}`} />
-              <input
-                type="text"
-                placeholder="Search chats..."
-                className={`flex-1 bg-transparent text-sm outline-none ${
-                  isDark ? 'text-white placeholder-white/30' : 'text-black placeholder-black/30'
+          {sidebarOpen && (
+            <div className="px-3 pb-2 pt-1">
+              <div className={`text-[12px] mb-1.5 px-2 ${isDark ? 'text-white/45' : 'text-black/45'}`}>Projects</div>
+              <button
+                className={`w-full flex items-center gap-2.5 px-2.5 h-9 rounded-lg text-sm transition-all duration-200 ${
+                  isDark ? 'text-white/85 hover:bg-white/[0.06]' : 'text-black/85 hover:bg-black/[0.04]'
                 }`}
-              />
-            </div>
-          </div>
+                title="New project"
+              >
+                <FolderPlus className="w-4 h-4" />
+                New project
+              </button>
 
-          {/* Chat History */}
-          <div className="flex-1 overflow-y-auto px-3">
-            <div className={`text-xs font-medium mb-2 px-2 ${isDark ? 'text-white/40' : 'text-black/40'}`}>
-              Recent
+              <div className="space-y-1 mt-1.5">
+                {projectCollections.map((item, idx) => (
+                  <button
+                    key={item.id}
+                    className={`w-full flex items-center gap-2.5 px-2.5 h-8 rounded-lg text-sm transition-all duration-200 ${
+                      idx === 1
+                        ? isDark
+                          ? 'bg-white/[0.08] text-white'
+                          : 'bg-black/[0.08] text-black'
+                        : isDark
+                          ? 'text-white/80 hover:bg-white/[0.05]'
+                          : 'text-black/80 hover:bg-black/[0.04]'
+                    }`}
+                    title={item.label}
+                  >
+                    <item.icon className={`w-4 h-4 ${item.tone}`} />
+                    <span className="truncate">{item.label}</span>
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="space-y-1">
-              {chatHistory.map((chat) => (
-                <button
-                  key={chat.id}
-                  className={`w-full text-left px-3 py-2.5 rounded-xl transition-all group ${
-                    isDark 
-                      ? 'hover:bg-white/[0.06]' 
-                      : 'hover:bg-black/[0.04]'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    {chat.hasWebsite ? (
-                      <Globe className={`w-4 h-4 flex-shrink-0 ${isDark ? 'text-white/40' : 'text-black/40'}`} />
-                    ) : (
-                      <MessageSquare className={`w-4 h-4 flex-shrink-0 ${isDark ? 'text-white/40' : 'text-black/40'}`} />
-                    )}
-                    <span className={`text-sm truncate ${isDark ? 'text-white/80' : 'text-black/80'}`}>
-                      {chat.title}
-                    </span>
+          )}
+
+          <div className={`flex-1 overflow-y-auto ${sidebarOpen ? 'px-3 pb-3' : 'px-2 pb-2'}`}>
+            {sidebarOpen && (
+              <div className="space-y-3">
+                {Object.entries(groupedChats).map(([groupName, chats]) => {
+                  if (chats.length === 0) return null;
+
+                  return (
+                    <div key={groupName}>
+                      <div className={`text-[11px] mb-1.5 px-2 ${isDark ? 'text-white/38' : 'text-black/38'}`}>
+                        {groupName}
+                      </div>
+                      <div className="space-y-1">
+                        {chats.map((chat) => (
+                          <button
+                            key={chat.id}
+                            title={chat.title}
+                            onClick={() => setSelectedChatId(chat.id)}
+                            className={`w-full text-left px-2.5 py-2 rounded-lg transition-all duration-200 group ${
+                              selectedChatId === chat.id
+                                ? isDark
+                                  ? 'bg-white/[0.10] text-white'
+                                  : 'bg-black/[0.10] text-black'
+                                : isDark
+                                  ? 'hover:bg-white/[0.06]'
+                                  : 'hover:bg-black/[0.04]'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className={`text-[13px] truncate ${isDark ? 'text-white/88' : 'text-black/88'}`}>
+                                {chat.title}
+                              </span>
+                              <MoreHorizontal className={`w-3.5 h-3.5 opacity-0 group-hover:opacity-60 transition-all ${isDark ? 'text-white/40' : 'text-black/40'}`} />
+                            </div>
+                            <p className={`text-[11px] truncate mt-0.5 ${isDark ? 'text-white/30' : 'text-black/30'}`}>
+                              {chat.preview}
+                            </p>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+                {filteredChats.length === 0 && (
+                  <div className={`px-2 py-3 text-[11px] ${isDark ? 'text-white/35' : 'text-black/35'}`}>
+                    No chats found.
                   </div>
-                  <p className={`text-xs truncate mt-1 ml-6 ${isDark ? 'text-white/30' : 'text-black/30'}`}>
-                    {chat.preview}
-                  </p>
-                </button>
-              ))}
-            </div>
+                )}
+              </div>
+            )}
           </div>
 
-          {/* Sidebar Footer */}
-          <div className={`p-3 border-t ${isDark ? 'border-white/[0.06]' : 'border-black/[0.06]'}`}>
+          <div className={`p-2 border-t ${isDark ? 'border-white/[0.06]' : 'border-black/[0.06]'}`}>
             <button
               onClick={() => setIsDark(!isDark)}
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm transition-all ${
-                isDark 
-                  ? 'hover:bg-white/[0.06] text-white/60 hover:text-white' 
-                  : 'hover:bg-black/[0.04] text-black/60 hover:text-black'
+              className={`w-full flex items-center ${sidebarOpen ? 'gap-2.5 px-2.5 justify-start' : 'justify-center px-0'} h-9 rounded-lg text-sm transition-all duration-200 ${
+                isDark
+                  ? 'text-white/65 hover:bg-white/[0.06] hover:text-white'
+                  : 'text-black/65 hover:bg-black/[0.04] hover:text-black'
               }`}
+              title={isDark ? 'Light mode' : 'Dark mode'}
             >
               {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-              {isDark ? 'Light Mode' : 'Dark Mode'}
+              {sidebarOpen && (isDark ? 'Light mode' : 'Dark mode')}
             </button>
             <button
-              className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm transition-all ${
-                isDark 
-                  ? 'hover:bg-white/[0.06] text-white/60 hover:text-white' 
-                  : 'hover:bg-black/[0.04] text-black/60 hover:text-black'
+              className={`w-full flex items-center ${sidebarOpen ? 'gap-2.5 px-2.5 justify-start' : 'justify-center px-0'} h-9 rounded-lg text-sm transition-all duration-200 ${
+                isDark
+                  ? 'text-white/65 hover:bg-white/[0.06] hover:text-white'
+                  : 'text-black/65 hover:bg-black/[0.04] hover:text-black'
               }`}
+              title="Settings"
             >
               <Settings className="w-4 h-4" />
-              Settings
+              {sidebarOpen && 'Settings'}
             </button>
           </div>
         </div>
@@ -588,8 +701,10 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
                   ? 'hover:bg-white/[0.06] text-white/60' 
                   : 'hover:bg-black/[0.04] text-black/60'
               }`}
+              title={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
+              aria-label={sidebarOpen ? 'Collapse sidebar' : 'Expand sidebar'}
             >
-              {sidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+              {sidebarOpen ? <PanelLeftClose className="w-5 h-5" /> : <PanelLeftOpen className="w-5 h-5" />}
             </button>
             {!isNewChat && (
               <span className={`text-sm font-medium ${isDark ? 'text-white/60' : 'text-black/60'}`}>
@@ -624,15 +739,15 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
             
             {/* New Chat State */}
             {isNewChat ? (
-              <div className="flex-1 flex flex-col items-center justify-center px-6">
+                <div className="flex-1 flex flex-col items-center justify-center px-4">
                 <div className="max-w-2xl w-full">
                   {/* Greeting */}
-                  <h1 className={`animate-slide-in-right text-4xl font-semibold text-center mb-3 ${
+                  <h1 className={`animate-slide-in-right text-3xl font-semibold text-center mb-2.5 ${
                     isDark ? 'text-white' : 'text-black'
                   }`}>
                     {greeting}
                   </h1>
-                  <p className={`animate-slide-in-right animate-delay-100 text-lg text-center mb-12 ${
+                  <p className={`animate-slide-in-right animate-delay-100 text-base text-center mb-8 ${
                     isDark ? 'text-white/50' : 'text-black/50'
                   }`}>
                     What would you like to create today?
@@ -697,12 +812,12 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
                   </div>
 
                   {/* Quick Actions */}
-                  <div className="animate-slide-in-right animate-delay-300 flex flex-wrap items-center justify-center gap-2 mt-8">
+                  <div className="animate-slide-in-right animate-delay-300 flex flex-wrap items-center justify-center gap-2 mt-6">
                     {quickActions.map((action) => (
                       <button
                         key={action.label}
                         onClick={() => handleQuickAction(action)}
-                        className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm transition-all ${
+                          className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-all ${
                           isDark 
                             ? 'bg-white/[0.04] hover:bg-white/[0.08] text-white/70 hover:text-white border border-white/[0.06]' 
                             : 'bg-white hover:bg-black/[0.02] text-black/70 hover:text-black border border-black/[0.08] shadow-sm'
@@ -719,7 +834,7 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
               <>
                 {/* Messages */}
                 <div className="flex-1 overflow-y-auto">
-                  <div className="max-w-3xl mx-auto px-6 py-8 space-y-5">
+                  <div className="max-w-3xl mx-auto px-4 py-6 space-y-4">
                     {messages.map((message) => (
                       <div
                         key={message.id}
@@ -865,7 +980,7 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
 
                 {/* Input */}
                 <div className="flex-shrink-0">
-                  <div className="max-w-3xl mx-auto px-6 py-4">
+                  <div className="max-w-3xl mx-auto px-4 py-3">
                     <div 
                       className={`relative rounded-2xl transition-all duration-300 overflow-hidden ${
                         isDark 

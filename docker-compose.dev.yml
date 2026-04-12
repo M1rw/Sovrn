@@ -81,14 +81,6 @@ services:
     ports:
       - "6379:6379"  # Expose for local tools
 
-  router:
-    ports:
-      - "7070:7070"
-    environment:
-      - SOVRN_ROUTER_PORT=7070
-      - MOCK_PUTER=${MOCK_PUTER:-true}
-      - MOCK_PUTER_DOWN=${MOCK_PUTER_DOWN:-false}
-
   # ---------------------------------------------------------------------------
   # Additional dev services
   # ---------------------------------------------------------------------------

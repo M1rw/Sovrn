@@ -9,9 +9,10 @@
     "services/*"
   ],
   "scripts": {
-    "dev": "concurrently -n web,api -c cyan,magenta \"npm run dev:web\" \"npm run dev:api\"",
+    "dev": "npm run dev:deps && concurrently -n web,api -c cyan,magenta \"npm run dev:web\" \"npm run dev:api\"",
+    "dev:deps": "bash scripts/dev-deps.sh",
     "dev:web": "npm run dev -w apps/web",
-    "dev:api": "cd services/api && python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000",
+    "dev:api": "bash scripts/dev-api.sh",
     "build": "npm run build -w apps/web && npm run build -w packages/contracts",
     "build:docker": "docker compose build",
     "start": "docker compose up -d",
