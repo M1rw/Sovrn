@@ -14,19 +14,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Try backend with timeout
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout
+    // Try backend with timeout.
+    // Avoid aborting the underlying fetch stream because cancellation can surface
+    // "Cannot write to a closing writable stream" in Next.js dev/runtime.
+    const timeoutMs = 60000;
 
     try {
-      const response = await fetch(`${API_BASE}/api/v1/mml/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, style: style || 'modern' }),
-        signal: controller.signal,
-      });
-      
-      clearTimeout(timeoutId);
+      const response = await Promise.race([
+        fetch(`${API_BASE}/api/v1/mml/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt, style: style || 'modern' }),
+        }),
+        new Promise<Response>((_, reject) => {
+          setTimeout(() => reject(new Error('Backend request timed out')), timeoutMs);
+        }),
+      ]);
 
       if (response.ok) {
         const data = await response.json();
@@ -35,7 +38,6 @@ export async function POST(request: NextRequest) {
         }
       }
     } catch (fetchError) {
-      clearTimeout(timeoutId);
       console.log('Backend unavailable, using fallback');
     }
 
