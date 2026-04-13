@@ -28,6 +28,14 @@ sys.path.insert(0, str(Path(__file__).parent))
 from app.lib.ai.mml_engine import MMLEngine, MMLConfig, WebsiteStyle, get_mml_engine
 
 
+LEGACY_CHAT_DEPRECATION_RESPONSE = {
+    "detail": "Deprecated endpoint. Use canonical conversation path POST /api/v1/ai/chat on the main API service.",
+    "type": "deprecated_endpoint",
+    "canonical_path": "/api/v1/ai/chat",
+    "canonical_service": "services/api/app/api/v1/endpoints/ai.py::chat_completion",
+}
+
+
 # =============================================================================
 # Data Storage
 # =============================================================================
@@ -242,24 +250,9 @@ async def generate_website(request: GenerateRequest):
 
 @app.post("/api/v1/ai/chat")
 async def chat(request: ChatRequest):
-    """General chat with the AI."""
-    
-    if mml_engine is None or not mml_engine.is_loaded:
-        raise HTTPException(status_code=503, detail="MML Engine not loaded")
-    
-    result = await mml_engine.chat(
-        message=request.message,
-        history=request.history
-    )
-    
-    if not result.success:
-        raise HTTPException(status_code=500, detail=result.error or "Chat failed")
-    
-    return {
-        "success": True,
-        "response": result.html,  # html field contains the response
-        "generation_time_ms": result.generation_time_ms
-    }
+    """Deprecated duplicate chat endpoint. Use canonical main API endpoint instead."""
+    _ = request
+    return JSONResponse(status_code=410, content=LEGACY_CHAT_DEPRECATION_RESPONSE)
 
 
 # =============================================================================
