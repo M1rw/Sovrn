@@ -3,6 +3,7 @@ SOVRN AI API - Simple version with file-based storage
 Works without external database
 """
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
@@ -78,6 +79,14 @@ class ChatResponse(BaseModel):
     model: str
     success: bool
     latency_ms: Optional[int] = None
+
+
+LEGACY_CHAT_DEPRECATION_RESPONSE = {
+    "detail": "Deprecated endpoint. Use canonical conversation path POST /api/v1/ai/chat on the main API service.",
+    "type": "deprecated_endpoint",
+    "canonical_path": "/api/v1/ai/chat",
+    "canonical_service": "services/api/app/api/v1/endpoints/ai.py::chat_completion",
+}
 
 class Project(BaseModel):
     id: Optional[str] = None
@@ -460,82 +469,9 @@ def generate_fallback_html(prompt: str) -> str:
 
 @app.post("/api/v1/ai/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """Chat completion using Phi-3 or MML Engine."""
-    import time
-    start = time.time()
-    
-    # Try MML engine first (it uses the same Phi-3 model)
-    if mml_engine and mml_engine.is_loaded:
-        messages = [{"role": m.role, "content": m.content} for m in request.messages]
-        
-        try:
-            # Use the llm directly from MML engine for chat
-            llm = mml_engine.llm
-            
-            # Build prompt in ChatML format
-            prompt_parts = []
-            for msg in messages:
-                if msg["role"] == "system":
-                    prompt_parts.append(f"<|im_start|>system\n{msg['content']}<|im_end|>")
-                elif msg["role"] == "user":
-                    prompt_parts.append(f"<|im_start|>user\n{msg['content']}<|im_end|>")
-                elif msg["role"] == "assistant":
-                    prompt_parts.append(f"<|im_start|>assistant\n{msg['content']}<|im_end|>")
-            
-            prompt_parts.append("<|im_start|>assistant\n")
-            full_prompt = "\n".join(prompt_parts)
-            
-            # Generate
-            output = llm(
-                full_prompt,
-                max_tokens=512,
-                temperature=request.temperature or 0.7,
-                stop=["<|im_end|>", "<|im_start|>"],
-            )
-            
-            content = output["choices"][0]["text"].strip()
-            latency = int((time.time() - start) * 1000)
-            
-            return ChatResponse(
-                content=content,
-                provider="mml",
-                model="phi-3-mini-4k-instruct",
-                success=True,
-                latency_ms=latency
-            )
-        except Exception as e:
-            print(f"MML chat error: {e}")
-    
-    # Fallback to phi3_ai
-    if phi3_ai and phi3_ai.is_loaded:
-        messages = [{"role": m.role, "content": m.content} for m in request.messages]
-        
-        try:
-            response = await phi3_ai.chat(messages, temperature=request.temperature)
-            latency = int((time.time() - start) * 1000)
-            
-            return ChatResponse(
-                content=response.content,
-                provider="phi3",
-                model="phi-3-mini-4k-instruct",
-                success=response.success,
-                latency_ms=latency
-            )
-        except Exception as e:
-            return ChatResponse(
-                content=f"Error: {str(e)}",
-                provider="phi3",
-                model="phi-3-mini-4k-instruct",
-                success=False
-            )
-    
-    # No AI available - return helpful message
-    return ChatResponse(
-        content="I'm currently running in limited mode. How can I help you with your website?",
-        provider="none",
-        model="none",
-        success=True
-    )
+    """Deprecated duplicate chat endpoint. Use canonical main API endpoint instead."""
+    _ = request
+    return JSONResponse(status_code=410, content=LEGACY_CHAT_DEPRECATION_RESPONSE)
 
 # ============================================================================
 # Projects Endpoints

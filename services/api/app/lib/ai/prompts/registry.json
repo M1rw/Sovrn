@@ -1,0 +1,49 @@
+{
+  "schema_version": "1.0",
+  "required_modules": [
+    "core_identity",
+    "output_contract"
+  ],
+  "modules": [
+    {
+      "id": "core_identity",
+      "version": "1.0.0",
+      "file": "modules/core_identity.v1.md",
+      "order": 10,
+      "required": true,
+      "checksum_sha256": "ef6ff11d9bdd46473cb61625d2a62538fff4bac819bb8cfcd6399594261f4c06"
+    },
+    {
+      "id": "website_clarification",
+      "version": "1.0.0",
+      "file": "modules/website_clarification.v1.md",
+      "order": 20,
+      "required": false,
+      "checksum_sha256": "0b61c9d160fe2dfe693bc3cf480de40e84acf84b74c3e40acc2ed4c5d7ff0b6d"
+    },
+    {
+      "id": "generation_readiness",
+      "version": "1.0.0",
+      "file": "modules/generation_readiness.v1.md",
+      "order": 30,
+      "required": false,
+      "checksum_sha256": "a730610fc3b8148942cf8731917bae40cd195e22083947b225e7e34809c672ed"
+    },
+    {
+      "id": "revision_rules",
+      "version": "1.0.0",
+      "file": "modules/revision_rules.v1.md",
+      "order": 40,
+      "required": false,
+      "checksum_sha256": "4802fd39521fb176ca848eebfdc53dde0282ecec1c9a88b283061c6d1761d358"
+    },
+    {
+      "id": "output_contract",
+      "version": "1.0.0",
+      "file": "modules/output_contract.v1.md",
+      "order": 90,
+      "required": true,
+      "checksum_sha256": "914542cf4d698a8c7cac30b2cba6b0d1135a6f857c37e0808c6af600334dfbe9"
+    }
+  ]
+}

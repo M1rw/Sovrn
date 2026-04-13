@@ -8,20 +8,35 @@ AI-powered generation endpoints using hybrid AI architecture.
 import asyncio
 import json
 import time
+from threading import Lock
 from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 import structlog
 
+from app.core.config import settings
 from app.lib.ai.providers import HybridAIEngine, AIProvider, AIResponse, get_ai_engine, AIMode
 from app.lib.ai.deep_thinking import DeepThinkingEngine, ThinkingPhase
+from app.lib.ai.prompt_registry import PromptRegistryLoader, PromptRegistryValidationError
+from app.lib.ai.structured_output import StructuredModelOutput, parse_structured_model_output
 
 logger = structlog.get_logger()
 
 router = APIRouter()
 
 CHAT_TIMEOUT_SECONDS = 12
+_prompt_registry_loader = PromptRegistryLoader()
+_shadow_metrics_lock = Lock()
+_shadow_metrics = {
+    "samples": 0,
+    "parse_success": 0,
+    "parse_failure": 0,
+    "repair_used": 0,
+    "action_total": 0,
+    "action_match": 0,
+    "action_mismatch": 0,
+}
 
 
 # =============================================================================
@@ -119,6 +134,210 @@ def _build_chat_fallback(request: ChatRequest, reason: Optional[str] = None) -> 
     )
 
 
+def _build_chat_prompt(request: ChatRequest) -> tuple[Optional[str], str]:
+    """Build canonical chat prompt with optional server-side prompt assembly."""
+    prompt_parts: List[str] = []
+
+    if settings.AI_PROMPT_ASSEMBLY_ON:
+        system_prompt: Optional[str] = None
+        try:
+            system_prompt = _prompt_registry_loader.assemble()
+        except PromptRegistryValidationError as e:
+            logger.error("ai_prompt_registry_validation_error", error=str(e))
+        except Exception as e:
+            logger.error("ai_prompt_registry_assembly_error", error=str(e))
+
+        # Under feature flag, client-supplied system prompts are ignored.
+        for msg in request.messages:
+            if msg.role == "user":
+                prompt_parts.append(msg.content)
+            elif msg.role == "assistant":
+                prompt_parts.append(f"Assistant: {msg.content}")
+
+        return system_prompt, "\n\n".join(prompt_parts)
+
+    system_prompt = None
+    for msg in request.messages:
+        if msg.role == "system":
+            system_prompt = msg.content
+        elif msg.role == "user":
+            prompt_parts.append(msg.content)
+        elif msg.role == "assistant":
+            prompt_parts.append(f"Assistant: {msg.content}")
+
+    return system_prompt, "\n\n".join(prompt_parts)
+
+
+def _resolve_shadow_action(request: ChatRequest, proposal: StructuredModelOutput) -> tuple[str, str]:
+    """Resolve action authoritatively in shadow mode from request and proposal."""
+    proposed_action = proposal.action
+    lowered_user = _latest_user_message(request).lower()
+
+    if proposed_action == "ready_to_generate":
+        has_site_intent = any(keyword in lowered_user for keyword in ("website", "landing", "portfolio", "shop", "app"))
+        generation_payload = proposal.generation_request if isinstance(proposal.generation_request, dict) else {}
+        has_brief = isinstance(generation_payload.get("brief"), str) and bool(generation_payload.get("brief", "").strip())
+        if has_site_intent and has_brief:
+            return "ready_to_generate", "generation_gate_passed"
+        return "ask_clarification", "generation_gate_failed"
+
+    if proposed_action == "propose_revision":
+        has_revision_intent = any(keyword in lowered_user for keyword in ("revise", "revision", "change", "update", "edit"))
+        revision_payload = proposal.revision_request if isinstance(proposal.revision_request, dict) else {}
+        has_revision_scope = bool(revision_payload.get("change_summary") or revision_payload.get("targets"))
+        if has_revision_intent and has_revision_scope:
+            return "propose_revision", "revision_gate_passed"
+        return "ask_clarification", "revision_gate_failed"
+
+    if proposed_action in {"respond", "ask_clarification", "error_recoverable"}:
+        return proposed_action, "accepted"
+
+    return "respond", "defaulted"
+
+
+def _record_structured_shadow_metrics(
+    parse_success: bool,
+    repair_used: bool,
+    proposed_action: Optional[str] = None,
+    resolved_action: Optional[str] = None,
+) -> None:
+    """Record shadow parsing/action metrics and emit quality-gate telemetry."""
+    if not settings.AI_STRUCTURED_SHADOW_METRICS_ENABLED:
+        return
+
+    with _shadow_metrics_lock:
+        _shadow_metrics["samples"] += 1
+        if parse_success:
+            _shadow_metrics["parse_success"] += 1
+        else:
+            _shadow_metrics["parse_failure"] += 1
+
+        if repair_used:
+            _shadow_metrics["repair_used"] += 1
+
+        action_outcome = "not_applicable"
+        if proposed_action and resolved_action:
+            _shadow_metrics["action_total"] += 1
+            if proposed_action == resolved_action:
+                _shadow_metrics["action_match"] += 1
+                action_outcome = "match"
+            else:
+                _shadow_metrics["action_mismatch"] += 1
+                action_outcome = "mismatch"
+
+        samples = _shadow_metrics["samples"]
+        parse_success_rate = _shadow_metrics["parse_success"] / samples
+        parse_failure_rate = _shadow_metrics["parse_failure"] / samples
+        repair_rate = _shadow_metrics["repair_used"] / samples
+
+        action_total = _shadow_metrics["action_total"]
+        action_mismatch_rate = (
+            _shadow_metrics["action_mismatch"] / action_total if action_total > 0 else 0.0
+        )
+
+        gate_ready = samples >= settings.AI_SHADOW_METRICS_MIN_SAMPLE_SIZE
+        gate_parse_success = parse_success_rate >= settings.AI_SHADOW_MIN_PARSE_SUCCESS_RATE
+        gate_repair = repair_rate <= settings.AI_SHADOW_MAX_REPAIR_RATE
+        gate_parse_failure = parse_failure_rate <= settings.AI_SHADOW_MAX_PARSE_FAILURE_RATE
+        gate_action_mismatch = action_mismatch_rate <= settings.AI_SHADOW_MAX_ACTION_MISMATCH_RATE
+        gate_pass = gate_ready and all(
+            [gate_parse_success, gate_repair, gate_parse_failure, gate_action_mismatch]
+        )
+
+        logger.info(
+            "ai_structured_shadow_telemetry",
+            parse_success=parse_success,
+            repair_used=repair_used,
+            action_outcome=action_outcome,
+            samples=samples,
+            parse_success_rate=round(parse_success_rate, 6),
+            parse_failure_rate=round(parse_failure_rate, 6),
+            repair_rate=round(repair_rate, 6),
+            action_mismatch_rate=round(action_mismatch_rate, 6),
+            gate_ready=gate_ready,
+            gate_pass=gate_pass,
+            gate_parse_success=gate_parse_success,
+            gate_repair=gate_repair,
+            gate_parse_failure=gate_parse_failure,
+            gate_action_mismatch=gate_action_mismatch,
+        )
+
+
+def _run_structured_shadow_parse(request: ChatRequest, content: str) -> None:
+    """Run shadow-mode structured parse/repair with optional shadow action resolution."""
+    if not settings.AI_STRUCTURED_SHADOW_ENABLED:
+        return
+
+    if not content.strip():
+        return
+
+    try:
+        result = parse_structured_model_output(content, max_repair_attempts=1)
+        if result.success and result.parsed is not None:
+            if settings.AI_ACTION_RESOLUTION_SHADOW_ENABLED:
+                proposed_action = result.parsed.action
+                resolved_action, reason = _resolve_shadow_action(request, result.parsed)
+                if proposed_action != resolved_action:
+                    logger.warning(
+                        "ai_structured_shadow_action_mismatch",
+                        proposed_action=proposed_action,
+                        resolved_action=resolved_action,
+                        reason=reason,
+                        repaired=result.repaired,
+                        repair_attempts=result.repair_attempts,
+                        generation_handoff_initiated=False,
+                    )
+                else:
+                    logger.info(
+                        "ai_structured_shadow_action_resolved",
+                        proposed_action=proposed_action,
+                        resolved_action=resolved_action,
+                        reason=reason,
+                        repaired=result.repaired,
+                        repair_attempts=result.repair_attempts,
+                        generation_handoff_initiated=False,
+                    )
+
+                _record_structured_shadow_metrics(
+                    parse_success=True,
+                    repair_used=result.repaired,
+                    proposed_action=proposed_action,
+                    resolved_action=resolved_action,
+                )
+            else:
+                logger.info(
+                    "ai_structured_shadow_parse_ok",
+                    repaired=result.repaired,
+                    repair_attempts=result.repair_attempts,
+                    action=result.parsed.action,
+                )
+                _record_structured_shadow_metrics(
+                    parse_success=True,
+                    repair_used=result.repaired,
+                )
+        else:
+            logger.warning(
+                "ai_structured_shadow_parse_failed",
+                repaired=result.repaired,
+                repair_attempts=result.repair_attempts,
+                error_type="structured_parse_failed",
+            )
+            _record_structured_shadow_metrics(
+                parse_success=False,
+                repair_used=result.repaired,
+            )
+    except Exception as e:
+        # Shadow parsing must never alter existing chat behavior.
+        logger.error(
+            "ai_structured_shadow_parse_exception",
+            error_type=type(e).__name__,
+        )
+        _record_structured_shadow_metrics(
+            parse_success=False,
+            repair_used=False,
+        )
+
+
 # =============================================================================
 # Endpoints
 # =============================================================================
@@ -162,19 +381,8 @@ async def chat_completion(request: ChatRequest):
             "thinking": AIMode.THINKING,
         }.get(request.mode, AIMode.BALANCED)
         
-        # Build prompt from messages
-        system_prompt = None
-        prompt_parts = []
-        
-        for msg in request.messages:
-            if msg.role == "system":
-                system_prompt = msg.content
-            elif msg.role == "user":
-                prompt_parts.append(msg.content)
-            elif msg.role == "assistant":
-                prompt_parts.append(f"Assistant: {msg.content}")
-        
-        prompt = "\n\n".join(prompt_parts)
+        # Build prompt from messages.
+        system_prompt, prompt = _build_chat_prompt(request)
         
         # Generate
         response = await asyncio.wait_for(
@@ -189,6 +397,8 @@ async def chat_completion(request: ChatRequest):
             ),
             timeout=CHAT_TIMEOUT_SECONDS,
         )
+
+        _run_structured_shadow_parse(request, response.content or "")
 
         latency_ms = int((time.monotonic() - start_time) * 1000)
 

@@ -75,6 +75,31 @@ class Settings(BaseSettings):
     INFERENCE_URL: str = "http://infer:8080"
     ALT_INFERENCE_URL: Optional[str] = None
     INFERENCE_TIMEOUT: int = 300  # 5 minutes for long generations
+
+    # ==========================================================================
+    # AI Chat Prompt Assembly
+    # ==========================================================================
+    AI_PROMPT_ASSEMBLY_ON: bool = False
+
+    # ==========================================================================
+    # AI Structured Shadow Parsing
+    # ==========================================================================
+    AI_STRUCTURED_SHADOW_ENABLED: bool = False
+
+    # ==========================================================================
+    # AI Shadow Action Resolution
+    # ==========================================================================
+    AI_ACTION_RESOLUTION_SHADOW_ENABLED: bool = False
+
+    # ==========================================================================
+    # AI Shadow Telemetry and Quality Gates
+    # ==========================================================================
+    AI_STRUCTURED_SHADOW_METRICS_ENABLED: bool = False
+    AI_SHADOW_METRICS_MIN_SAMPLE_SIZE: int = 3000
+    AI_SHADOW_MIN_PARSE_SUCCESS_RATE: float = Field(default=0.99, ge=0, le=1)
+    AI_SHADOW_MAX_REPAIR_RATE: float = Field(default=0.08, ge=0, le=1)
+    AI_SHADOW_MAX_PARSE_FAILURE_RATE: float = Field(default=0.005, ge=0, le=1)
+    AI_SHADOW_MAX_ACTION_MISMATCH_RATE: float = Field(default=0.20, ge=0, le=1)
     
     # ==========================================================================
     # Sparks (Monetization)
