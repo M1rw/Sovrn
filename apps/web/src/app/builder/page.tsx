@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect, useMemo } from 'react';
+import { useSession } from 'next-auth/react';
 import { 
   Send, 
   Bot,
@@ -37,6 +38,7 @@ import {
   MessageSquare,
   Settings,
 } from 'lucide-react';
+import { jobsApi, projectsApi, resolveCanonicalJobResult, type Job } from '@/lib/api';
 
 type ViewMode = 'preview' | 'code';
 
@@ -136,6 +138,7 @@ const styles = `
 `;
 
 export default function BuilderPage() {
+  const { data: session } = useSession();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isThinking, setIsThinking] = useState(false);
@@ -297,36 +300,94 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
     return "I'm here to help! Tell me what you'd like to create or just chat.";
   };
 
-  const generateWebsite = async (prompt: string): Promise<{ success: boolean; files: GeneratedFile[] }> => {
-    // Show thinking animation
+  const generateWebsite = async (
+    prompt: string
+  ): Promise<{ success: boolean; files: GeneratedFile[]; projectId?: string; jobId?: string; generationId?: string; error?: string }> => {
     setTaskSteps([
-      { id: 'thinking', label: 'Thinking', status: 'running' },
+      { id: 'create-project', label: 'Create project', status: 'running' },
+      { id: 'queue-job', label: 'Queue generation job', status: 'pending' },
+      { id: 'process-job', label: 'Process generation job', status: 'pending' },
     ]);
 
+    let projectId: string | undefined;
+    let jobId: string | undefined;
+
     try {
-      const response = await fetch('/api/v1/mml/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt, style: 'modern' })
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        if (data.html) {
-          setGeneratedHtml(data.html);
-          setShowPreview(true);
-          
-          // Store all generated files
-          const files: GeneratedFile[] = data.files || [];
-          setGeneratedFiles(files);
-          
-          return { success: true, files };
-        }
+      const token = session?.accessToken;
+      if (!token) {
+        throw new Error('Sign in is required for canonical generation.');
       }
+
+      const projectName = prompt.trim().split(/\s+/).slice(0, 6).join(' ') || 'Generated Site';
+      const project = await projectsApi.create(token, {
+        name: projectName,
+        description: prompt.slice(0, 180),
+        locale: 'en',
+      });
+      projectId = project.id;
+
+      setTaskSteps([
+        { id: 'create-project', label: 'Create project', status: 'completed' },
+        { id: 'queue-job', label: 'Queue generation job', status: 'running' },
+        { id: 'process-job', label: 'Process generation job', status: 'pending' },
+      ]);
+
+      const job = await projectsApi.generate(token, project.id, {
+        brief: prompt,
+        locale: 'en',
+        settings: { style: 'modern' },
+      });
+      jobId = job.id;
+
+      setTaskSteps([
+        { id: 'create-project', label: 'Create project', status: 'completed' },
+        { id: 'queue-job', label: 'Queue generation job', status: 'completed' },
+        { id: 'process-job', label: 'Process generation job', status: 'running' },
+      ]);
+
+      const pollStartedAt = Date.now();
+      let currentJob: Job = job;
+
+      while (currentJob.status === 'queued' || currentJob.status === 'processing') {
+        if (Date.now() - pollStartedAt > 180000) {
+          throw new Error('Generation timed out waiting for job completion.');
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        currentJob = await jobsApi.get(token, job.id);
+      }
+
+      const projectWithGenerations = await projectsApi.get(token, project.id);
+      const resolved = resolveCanonicalJobResult(currentJob, projectWithGenerations);
+      if (!resolved.ok || !resolved.previewHtml) {
+        throw new Error(resolved.error || 'Canonical artifacts could not be resolved.');
+      }
+
+      const files = (resolved.files || []) as GeneratedFile[];
+
+      setGeneratedHtml(resolved.previewHtml);
+      setShowPreview(true);
+      setGeneratedFiles(files);
+      setTaskSteps((prev) => prev.map((step) => ({ ...step, status: 'completed' })));
+
+      return {
+        success: true,
+        files,
+        projectId,
+        jobId,
+        generationId: resolved.generationId,
+      };
     } catch (error) {
-      console.error('Generation error:', error);
+      console.error('Canonical generation error:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown canonical generation error.';
+      return {
+        success: false,
+        files: [],
+        projectId,
+        jobId,
+        error: errorMessage,
+      };
     }
-    return { success: false, files: [] };
   };
 
   const streamText = async (messageId: string, fullText: string) => {
@@ -416,7 +477,7 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
       setIsGenerating(true);
       
       // Run generation (user can still chat during this)
-      const { success, files } = await generateWebsite(generatePrompt);
+      const { success, files, projectId, jobId, generationId, error } = await generateWebsite(generatePrompt);
       const duration = parseFloat(((Date.now() - startTime) / 1000).toFixed(2));
       
       // Format files for display
@@ -425,6 +486,11 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
         size: `${(f.size / 1024).toFixed(1)} KB`,
         type: f.type
       }));
+      const traceParts = [
+        projectId ? `Project: ${projectId}` : null,
+        jobId ? `Job: ${jobId}` : null,
+        generationId ? `Generation: ${generationId}` : null,
+      ].filter(Boolean).join(', ');
       
       // Update task message to show completion
       setMessages(prev => prev.map(msg => 
@@ -437,8 +503,8 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
                 { name: 'index.html', size: '0 KB', type: 'html' },
               ],
               content: success 
-                ? "✨ Done! Your website is ready. Check the preview panel!"
-                : "I created a template for you. Let me know if you'd like any changes!"
+                ? `✨ Done! Your website is ready. Check the preview panel! (${traceParts})`
+                : `❌ Generation failed${traceParts ? ` (${traceParts})` : ''}: ${error || 'Unknown error.'}`
             } 
           : msg
       ));

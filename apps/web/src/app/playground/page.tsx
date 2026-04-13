@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { useSession } from 'next-auth/react';
 import { 
   Send, 
   Sparkles, 
@@ -16,6 +17,7 @@ import {
   FolderOpen,
   Trash2
 } from 'lucide-react';
+import { jobsApi, projectsApi, resolveCanonicalJobResult, type Job } from '@/lib/api';
 
 // =============================================================================
 // Types
@@ -68,6 +70,7 @@ const STYLE_OPTIONS: { value: WebsiteStyle; label: string; icon: string }[] = [
 // =============================================================================
 
 export default function PlaygroundPage() {
+  const { data: session } = useSession();
   // State
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -142,40 +145,75 @@ export default function PlaygroundPage() {
     const userMessage: Message = { role: 'user', content: prompt };
     setMessages(prev => [...prev, userMessage]);
     
+    let projectId: string | undefined;
+    let jobId: string | undefined;
+
     try {
-      const res = await fetch('/api/v1/ai/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          prompt,
-          style: selectedStyle
-        })
+      const token = session?.accessToken;
+      if (!token) {
+        throw new Error('Sign in is required for canonical generation.');
+      }
+
+      const projectName = prompt.trim().split(/\s+/).slice(0, 6).join(' ') || 'Generated Site';
+      const project = await projectsApi.create(token, {
+        name: projectName,
+        description: prompt.slice(0, 180),
+        locale: 'en',
       });
-      
-      if (!res.ok) {
-        throw new Error(`API error: ${res.status}`);
+      projectId = project.id;
+
+      const job = await projectsApi.generate(token, project.id, {
+        brief: prompt,
+        locale: 'en',
+        settings: { style: selectedStyle },
+      });
+      jobId = job.id;
+
+      const pollStartedAt = Date.now();
+      let currentJob: Job = job;
+
+      while (currentJob.status === 'queued' || currentJob.status === 'processing') {
+        if (Date.now() - pollStartedAt > 180000) {
+          throw new Error('Generation timed out waiting for job completion.');
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        currentJob = await jobsApi.get(token, job.id);
       }
-      
-      const data = await res.json();
-      
-      if (data.success && data.html) {
-        setGeneratedHtml(data.html);
-        setGenerationTime(data.generation_time_ms);
-        setViewMode('preview');
-        
-        const assistantMessage: Message = {
-          role: 'assistant',
-          content: `✅ Website generated in ${(data.generation_time_ms / 1000).toFixed(1)}s! Check the Preview tab.`
-        };
-        setMessages(prev => [...prev, assistantMessage]);
-      } else {
-        throw new Error(data.error || 'Generation failed');
+
+      const projectWithGenerations = await projectsApi.get(token, project.id);
+      const resolved = resolveCanonicalJobResult(currentJob, projectWithGenerations);
+      if (!resolved.ok || !resolved.previewHtml) {
+        throw new Error(resolved.error || 'Canonical artifacts could not be resolved.');
       }
+
+      const generationMs = typeof resolved.generationTimeMs === 'number'
+        ? resolved.generationTimeMs
+        : Date.now() - pollStartedAt;
+      const generationId = resolved.generationId;
+      const traceParts = [
+        projectId ? `Project: ${projectId}` : null,
+        jobId ? `Job: ${jobId}` : null,
+        generationId ? `Generation: ${generationId}` : null,
+      ].filter(Boolean).join(', ');
+
+      setGeneratedHtml(resolved.previewHtml);
+      setGenerationTime(generationMs);
+      setViewMode('preview');
+      
+      const assistantMessage: Message = {
+        role: 'assistant',
+        content: `✅ Website generated in ${(generationMs / 1000).toFixed(1)}s! ${traceParts}`
+      };
+      setMessages(prev => [...prev, assistantMessage]);
       
     } catch (error: any) {
+      const traceParts = [
+        projectId ? `Project: ${projectId}` : null,
+        jobId ? `Job: ${jobId}` : null,
+      ].filter(Boolean).join(', ');
       const errorMessage: Message = {
         role: 'assistant',
-        content: `❌ Error: ${error.message}. Make sure the MML Engine is running.`
+        content: `❌ Generation failed${traceParts ? ` (${traceParts})` : ''}: ${error.message}`
       };
       setMessages(prev => [...prev, errorMessage]);
     } finally {

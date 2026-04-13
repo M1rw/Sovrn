@@ -134,10 +134,14 @@ async def root():
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     """Global exception handler."""
+    request_id = getattr(request.state, "request_id", None)
+    correlation_id = getattr(request.state, "correlation_id", None)
     logger.error(
         "Unhandled exception",
         path=request.url.path,
         method=request.method,
+        request_id=request_id,
+        correlation_id=correlation_id,
         error=str(exc),
         exc_info=exc
     )
@@ -145,7 +149,9 @@ async def global_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content={
             "detail": "Internal server error",
-            "type": "internal_error"
+            "type": "internal_error",
+            "request_id": request_id,
+            "correlation_id": correlation_id,
         }
     )
 
