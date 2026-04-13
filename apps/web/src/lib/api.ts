@@ -249,7 +249,7 @@ export interface SiteGeneration {
   strategy_output: Record<string, unknown>;
   design_output: Record<string, unknown>;
   code_output: Record<string, unknown>;
-  files: { path: string; language: string }[];
+  files: { path: string; content?: string; language?: string }[];
   lighthouse_scores: Record<string, unknown>;
   created_at: string;
 }
@@ -332,6 +332,136 @@ export interface PaginatedResponse<T> {
   page: number;
   page_size: number;
   pages: number;
+}
+
+export interface CanonicalGeneratedFile {
+  name: string;
+  content: string;
+  type: string;
+  size: number;
+}
+
+export interface CanonicalJobResolution {
+  ok: boolean;
+  previewHtml?: string;
+  files?: CanonicalGeneratedFile[];
+  generationId?: string;
+  generationTimeMs?: number;
+  source?: 'generation-record' | 'job-output';
+  error?: string;
+}
+
+function normalizeFile(name: string, content: string): CanonicalGeneratedFile {
+  const type = name.includes('.') ? name.split('.').pop() || 'txt' : 'txt';
+  return {
+    name,
+    content,
+    type,
+    size: new TextEncoder().encode(content).length,
+  };
+}
+
+function filesFromMap(raw: unknown): CanonicalGeneratedFile[] {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return [];
+  }
+
+  return Object.entries(raw as Record<string, unknown>).map(([name, content]) => {
+    const textContent = typeof content === 'string' ? content : JSON.stringify(content ?? '');
+    return normalizeFile(name, textContent);
+  });
+}
+
+function filesFromGeneration(raw: unknown): CanonicalGeneratedFile[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const parsed: CanonicalGeneratedFile[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') {
+      continue;
+    }
+
+    const path = (item as { path?: unknown }).path;
+    const content = (item as { content?: unknown }).content;
+    if (typeof path !== 'string') {
+      continue;
+    }
+
+    parsed.push(normalizeFile(path, typeof content === 'string' ? content : ''));
+  }
+
+  return parsed;
+}
+
+export function resolveCanonicalJobResult(job: Job, project: ProjectWithGenerations): CanonicalJobResolution {
+  if (job.status === 'failed') {
+    return {
+      ok: false,
+      error: job.error || 'Generation failed during canonical job processing.',
+    };
+  }
+
+  if (job.status !== 'completed') {
+    return {
+      ok: false,
+      error: `Generation job is not complete (status: ${job.status}).`,
+    };
+  }
+
+  const generations = Array.isArray(project.generations) ? project.generations : [];
+  const matching = generations.filter((generation) => generation.job_id === job.id);
+  const candidates = matching.length > 0 ? matching : generations;
+
+  if (candidates.length > 0) {
+    const sorted = [...candidates].sort((a, b) => {
+      const versionDelta = (b.version || 0) - (a.version || 0);
+      if (versionDelta !== 0) {
+        return versionDelta;
+      }
+      return Date.parse(b.created_at || '') - Date.parse(a.created_at || '');
+    });
+    const chosen = sorted[0];
+    const files = filesFromGeneration(chosen.files);
+    const codeOutput = chosen.code_output || {};
+    const previewHtml = typeof codeOutput.preview_html === 'string'
+      ? codeOutput.preview_html
+      : files.find((file) => file.name === 'index.html')?.content || '';
+
+    if (previewHtml) {
+      return {
+        ok: true,
+        previewHtml,
+        files,
+        generationId: chosen.id,
+        generationTimeMs: typeof codeOutput.generation_time_ms === 'number' ? codeOutput.generation_time_ms : undefined,
+        source: 'generation-record',
+      };
+    }
+  }
+
+  const output = (job.output || {}) as Record<string, unknown>;
+  const files = filesFromMap(output.files);
+  const previewHtml = typeof output.preview_html === 'string'
+    ? output.preview_html
+    : files.find((file) => file.name === 'index.html')?.content || '';
+
+  if (previewHtml) {
+    return {
+      ok: true,
+      previewHtml,
+      files,
+      generationId: typeof output.generation_id === 'string' ? output.generation_id : undefined,
+      generationTimeMs: typeof output.generation_time_ms === 'number' ? output.generation_time_ms : undefined,
+      source: 'job-output',
+    };
+  }
+
+  return {
+    ok: false,
+    error: 'Canonical job completed but no persisted artifacts could be resolved.',
+  };
 }
 
 export { ApiError };

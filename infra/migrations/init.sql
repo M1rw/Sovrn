@@ -193,6 +193,7 @@ CREATE TABLE site_generations (
 );
 
 CREATE INDEX idx_site_generations_project ON site_generations(project_id);
+CREATE UNIQUE INDEX uq_site_generations_job_id ON site_generations(job_id) WHERE job_id IS NOT NULL;
 
 -- =============================================================================
 -- CULTURAL ADAPTATION RULES

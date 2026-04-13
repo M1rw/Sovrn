@@ -20,12 +20,19 @@ class LoggingMiddleware(BaseHTTPMiddleware):
     """Middleware for structured request/response logging."""
     
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        # Generate request ID
-        request_id = str(uuid4())[:8]
+        # Request ID is always generated server-side for uniqueness.
+        request_id = str(uuid4())
+        # Correlation ID can be propagated from upstream clients/services.
+        correlation_id = request.headers.get("X-Correlation-ID", request_id)
+        request.state.request_id = request_id
+        request.state.correlation_id = correlation_id
         
         # Bind request ID to logger context
         structlog.contextvars.clear_contextvars()
-        structlog.contextvars.bind_contextvars(request_id=request_id)
+        structlog.contextvars.bind_contextvars(
+            request_id=request_id,
+            correlation_id=correlation_id,
+        )
         
         # Start timer
         start_time = time.perf_counter()
@@ -37,6 +44,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
             path=request.url.path,
             query=str(request.query_params) if request.query_params else None,
             client_ip=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
         )
         
         # Process request
@@ -57,6 +65,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
             
             # Add request ID header
             response.headers["X-Request-ID"] = request_id
+            response.headers["X-Correlation-ID"] = correlation_id
             
             return response
             
@@ -70,3 +79,5 @@ class LoggingMiddleware(BaseHTTPMiddleware):
                 error=str(e),
             )
             raise
+        finally:
+            structlog.contextvars.clear_contextvars()
