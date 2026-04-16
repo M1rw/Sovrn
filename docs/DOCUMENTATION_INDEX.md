@@ -1,5 +1,19 @@
 # SOVRN Pipeline Documentation Index
 
+## Canonical Documentation Entry Points
+
+Use these files first for the current, canonical understanding of SOVRN:
+
+- [SOVRN_OVERVIEW.md](SOVRN_OVERVIEW.md)
+- [ARCHITECTURE.md](ARCHITECTURE.md)
+- [ROADMAP.md](ROADMAP.md)
+- [TODO.md](TODO.md)
+- [DECISIONS.md](DECISIONS.md)
+
+## Legacy Documentation Note
+
+This file and the pipeline documents below are retained as historical references. Some details may reflect earlier phases and may not represent current canonical status.
+
 ## 📋 Quick Navigation
 
 ### For Quick Start
@@ -10,21 +24,21 @@
 - API endpoints overview
 
 ### For Technical Details
-👉 **[PIPELINE_STATUS.md](PIPELINE_STATUS.md)** - Full technical documentation
+👉 **[PIPELINE_STATUS.md](legacy/status/PIPELINE_STATUS.md)** - Full technical documentation
 - Complete pipeline architecture
 - Detailed configuration
 - Component specifications
 - Known limitations
 
 ### For Implementation Overview
-👉 **[IMPLEMENTATION_COMPLETE.md](IMPLEMENTATION_COMPLETE.md)** - Full implementation guide
+👉 **[IMPLEMENTATION_COMPLETE.md](legacy/status/IMPLEMENTATION_COMPLETE.md)** - Full implementation guide
 - Comprehensive architecture diagram
 - What gets generated
 - Usage examples (Python, REST API)
 - Success criteria (all met ✅)
 
 ### For Session Summary
-👉 **[SESSION_SUMMARY.md](SESSION_SUMMARY.md)** - What was accomplished
+👉 **[SESSION_SUMMARY.md](legacy/status/SESSION_SUMMARY.md)** - What was accomplished
 - What was accomplished in this session
 - Code changes made
 - Testing results
@@ -231,9 +245,9 @@ docker exec -i sovrn-api python -u -c "
 | Need | Reference |
 |------|-----------|
 | Quick start | [README_PIPELINE.md](README_PIPELINE.md) |
-| Technical details | [PIPELINE_STATUS.md](PIPELINE_STATUS.md) |
-| Full implementation | [IMPLEMENTATION_COMPLETE.md](IMPLEMENTATION_COMPLETE.md) |
-| Session summary | [SESSION_SUMMARY.md](SESSION_SUMMARY.md) |
+| Technical details | [PIPELINE_STATUS.md](legacy/status/PIPELINE_STATUS.md) |
+| Full implementation | [IMPLEMENTATION_COMPLETE.md](legacy/status/IMPLEMENTATION_COMPLETE.md) |
+| Session summary | [SESSION_SUMMARY.md](legacy/status/SESSION_SUMMARY.md) |
 | Docker commands | `docker-compose --help` |
 | API docs | http://localhost/api/v1/docs |
 

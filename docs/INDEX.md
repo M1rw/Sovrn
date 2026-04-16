@@ -1,6 +1,20 @@
 # SOVRN Documentation Index
 ## Complete Guide to All SOVRN Resources
 
+## Canonical Documentation Entry Points
+
+Use these files first for the current, canonical understanding of SOVRN:
+
+- [SOVRN_OVERVIEW.md](SOVRN_OVERVIEW.md)
+- [ARCHITECTURE.md](ARCHITECTURE.md)
+- [ROADMAP.md](ROADMAP.md)
+- [TODO.md](TODO.md)
+- [DECISIONS.md](DECISIONS.md)
+
+## Legacy Documentation Note
+
+Older files referenced below are preserved for traceability and historical context. Some may include deprecated planning material or outdated status claims.
+
 **Last Updated**: January 3, 2026  
 **Phase**: 1 (Complete)  
 **Version**: 1.0.0
@@ -11,7 +25,7 @@
 
 ### New to SOVRN?
 
-1. **[BUILD_COMPLETE.md](BUILD_COMPLETE.md)** ← You are here!
+1. **[BUILD_COMPLETE.md](legacy/status/BUILD_COMPLETE.md)** ← You are here!
    - What was built
    - How to get started
    - Quick start guide
@@ -34,9 +48,9 @@
 
 | Document | Size | Purpose | Read Time |
 |----------|------|---------|-----------|
-| [BUILD_COMPLETE.md](BUILD_COMPLETE.md) | 5K | Session summary | 5 min |
+| [BUILD_COMPLETE.md](legacy/status/BUILD_COMPLETE.md) | 5K | Session summary | 5 min |
 | [README.md](README.md) | 2K | Project overview | 5 min |
-| [PHASE_1_COMPLETE.md](PHASE_1_COMPLETE.md) | 5K | Phase details | 10 min |
+| [PHASE_1_COMPLETE.md](legacy/status/PHASE_1_COMPLETE.md) | 5K | Phase details | 10 min |
 | [BUILD_GUIDE.md](docs/BUILD_GUIDE.md) | 4K | Setup guide | 15 min |
 | [QUICK_REFERENCE.md](docs/QUICK_REFERENCE.md) | 3K | Commands | 5 min |
 | [SYSTEM_ARCHITECTURE.md](docs/SYSTEM_ARCHITECTURE.md) | 10K | Technical design | 20 min |
@@ -111,7 +125,7 @@ open http://localhost:3000
 1. Read: [README.md](README.md) (overview)
 2. Review: [COMPETITIVE_ANALYSIS.md](docs/COMPETITIVE_ANALYSIS.md) (market)
 3. Check: [GAP_ANALYSIS.md](docs/GAP_ANALYSIS.md) (roadmap)
-4. Understand: [PHASE_1_COMPLETE.md](PHASE_1_COMPLETE.md) (status)
+4. Understand: [PHASE_1_COMPLETE.md](legacy/status/PHASE_1_COMPLETE.md) (status)
 
 **Key Metrics**:
 - Generation time: 4-6.5 minutes
@@ -129,9 +143,9 @@ open http://localhost:3000
 ### For Business/Executive
 
 **Executive Summary**:
-1. Read: [FINAL_REPORT.md](docs/FINAL_REPORT.md) (complete overview)
+1. Read: [FINAL_REPORT.md](legacy/status/FINAL_REPORT.md) (complete overview)
 2. Review: [COMPETITIVE_ANALYSIS.md](docs/COMPETITIVE_ANALYSIS.md) (market position)
-3. Check: [BUILD_COMPLETE.md](BUILD_COMPLETE.md) (status)
+3. Check: [BUILD_COMPLETE.md](legacy/status/BUILD_COMPLETE.md) (status)
 
 **Key Points**:
 - ✅ Phase 1 complete (80% implementation)
@@ -226,10 +240,10 @@ apps/web/
 → [COMPETITIVE_ANALYSIS.md](docs/COMPETITIVE_ANALYSIS.md)
 
 #### "What was completed this session?"
-→ [BUILD_COMPLETE.md](BUILD_COMPLETE.md)
+→ [BUILD_COMPLETE.md](legacy/status/BUILD_COMPLETE.md)
 
 #### "What's the project status?"
-→ [PHASE_1_COMPLETE.md](PHASE_1_COMPLETE.md)
+→ [PHASE_1_COMPLETE.md](legacy/status/PHASE_1_COMPLETE.md)
 
 #### "How do I use the API?"
 → [API.md](docs/API.md)
@@ -450,13 +464,13 @@ Total: ~55 minutes
 ## ❓ FAQ
 
 ### "Where should I start?"
-→ [BUILD_COMPLETE.md](BUILD_COMPLETE.md) or [README.md](README.md)
+→ [BUILD_COMPLETE.md](legacy/status/BUILD_COMPLETE.md) or [README.md](README.md)
 
 ### "How do I build it?"
 → [BUILD_GUIDE.md](docs/BUILD_GUIDE.md)
 
 ### "What's the status?"
-→ [PHASE_1_COMPLETE.md](PHASE_1_COMPLETE.md)
+→ [PHASE_1_COMPLETE.md](legacy/status/PHASE_1_COMPLETE.md)
 
 ### "What's the architecture?"
 → [SYSTEM_ARCHITECTURE.md](docs/SYSTEM_ARCHITECTURE.md)
@@ -465,7 +479,7 @@ Total: ~55 minutes
 → [DEPLOYMENT.md](docs/DEPLOYMENT.md)
 
 ### "What's the business plan?"
-→ [FINAL_REPORT.md](docs/FINAL_REPORT.md)
+→ [FINAL_REPORT.md](legacy/status/FINAL_REPORT.md)
 
 ### "How am I better than competitors?"
 → [COMPETITIVE_ANALYSIS.md](docs/COMPETITIVE_ANALYSIS.md)
@@ -496,6 +510,6 @@ Free to share, modify, and distribute.
 **Version**: 1.0.0  
 **Status**: Complete for Phase 1  
 
-**Remember**: Start with [BUILD_COMPLETE.md](BUILD_COMPLETE.md) or [README.md](README.md)!
+**Remember**: Start with [BUILD_COMPLETE.md](legacy/status/BUILD_COMPLETE.md) or [README.md](README.md)!
 
 🚀 **Happy building!**
