@@ -6,20 +6,34 @@ AI-powered generation endpoints using hybrid AI architecture.
 """
 
 import asyncio
+import hashlib
 import json
 import time
 from threading import Lock
 from typing import Optional, Dict, Any, List
+from uuid import UUID
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 import structlog
 
 from app.core.config import settings
+from app.core.database import async_session
 from app.lib.ai.providers import HybridAIEngine, AIProvider, AIResponse, get_ai_engine, AIMode
 from app.lib.ai.deep_thinking import DeepThinkingEngine, ThinkingPhase
 from app.lib.ai.prompt_registry import PromptRegistryLoader, PromptRegistryValidationError
+from app.lib.ai.conversation_summary import (
+    SummaryTriggerDecision,
+    parse_conversation_summary_output,
+    should_trigger_conversation_summary,
+)
 from app.lib.ai.structured_output import StructuredModelOutput, parse_structured_model_output
+from app.services.conversation_repository import (
+    ConversationRepository,
+    ConversationRepositoryError,
+    ConversationThreadNotFoundError,
+    ConversationVersionConflictError,
+)
 
 logger = structlog.get_logger()
 
@@ -52,6 +66,10 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     """Chat completion request."""
     messages: List[ChatMessage]
+    user_id: Optional[UUID] = None
+    project_id: Optional[UUID] = None
+    thread_id: Optional[UUID] = None
+    idempotency_key: Optional[str] = Field(default=None, min_length=8, max_length=128)
     model: Optional[str] = None
     provider: Optional[str] = Field(default="auto", description="auto, puter, phi3")
     mode: Optional[str] = Field(default="balanced", description="fast, balanced, quality, thinking")
@@ -134,8 +152,12 @@ def _build_chat_fallback(request: ChatRequest, reason: Optional[str] = None) -> 
     )
 
 
-def _build_chat_prompt(request: ChatRequest) -> tuple[Optional[str], str]:
+def _build_chat_prompt(
+    request: ChatRequest,
+    messages: Optional[List[ChatMessage]] = None,
+) -> tuple[Optional[str], str]:
     """Build canonical chat prompt with optional server-side prompt assembly."""
+    message_list = messages if messages is not None else request.messages
     prompt_parts: List[str] = []
 
     if settings.AI_PROMPT_ASSEMBLY_ON:
@@ -148,7 +170,7 @@ def _build_chat_prompt(request: ChatRequest) -> tuple[Optional[str], str]:
             logger.error("ai_prompt_registry_assembly_error", error=str(e))
 
         # Under feature flag, client-supplied system prompts are ignored.
-        for msg in request.messages:
+        for msg in message_list:
             if msg.role == "user":
                 prompt_parts.append(msg.content)
             elif msg.role == "assistant":
@@ -157,7 +179,7 @@ def _build_chat_prompt(request: ChatRequest) -> tuple[Optional[str], str]:
         return system_prompt, "\n\n".join(prompt_parts)
 
     system_prompt = None
-    for msg in request.messages:
+    for msg in message_list:
         if msg.role == "system":
             system_prompt = msg.content
         elif msg.role == "user":
@@ -166,6 +188,151 @@ def _build_chat_prompt(request: ChatRequest) -> tuple[Optional[str], str]:
             prompt_parts.append(f"Assistant: {msg.content}")
 
     return system_prompt, "\n\n".join(prompt_parts)
+
+
+def _message_signature(message: ChatMessage) -> tuple[str, str]:
+    return (message.role, message.content.strip())
+
+
+def _merge_retrieved_and_request_messages(
+    retrieved_messages: List[ChatMessage],
+    request_messages: List[ChatMessage],
+) -> List[ChatMessage]:
+    """Merge retrieved context and request messages with deterministic overlap handling."""
+    if not retrieved_messages:
+        return list(request_messages)
+
+    if not request_messages:
+        return list(retrieved_messages)
+
+    retrieved_signatures = [_message_signature(m) for m in retrieved_messages]
+    request_signatures = [_message_signature(m) for m in request_messages]
+
+    max_overlap = min(len(retrieved_signatures), len(request_signatures))
+    overlap = 0
+    for size in range(max_overlap, 0, -1):
+        if retrieved_signatures[-size:] == request_signatures[:size]:
+            overlap = size
+            break
+
+    return [*retrieved_messages, *request_messages[overlap:]]
+
+
+def _recent_turns_to_messages(recent_turns: List[Any]) -> List[ChatMessage]:
+    """Convert persisted recent turns to canonical prompt messages."""
+    messages: List[ChatMessage] = []
+
+    for turn in recent_turns:
+        user_message = (getattr(turn, "user_message", "") or "").strip()
+        if user_message:
+            messages.append(ChatMessage(role="user", content=user_message))
+
+        assistant_message = ""
+        server_response = getattr(turn, "server_response", None)
+        if isinstance(server_response, dict):
+            content = server_response.get("content")
+            if isinstance(content, str):
+                assistant_message = content.strip()
+
+        if assistant_message:
+            messages.append(ChatMessage(role="assistant", content=assistant_message))
+
+    return messages
+
+
+def _build_summary_context_message(summary_output: Any) -> ChatMessage:
+    """Create a deterministic non-authoritative summary message for compacted context."""
+    lines = [
+        (
+            "Conversation summary (non-authoritative) "
+            f"for turns {summary_output.from_turn_index}-{summary_output.to_turn_index}: "
+            f"{summary_output.summary.strip()}"
+        )
+    ]
+
+    key_points = [
+        point.strip()
+        for point in summary_output.key_points
+        if isinstance(point, str) and point.strip()
+    ]
+    if key_points:
+        lines.append("Key points:")
+        lines.extend(f"- {point}" for point in key_points[:5])
+
+    return ChatMessage(role="assistant", content="\n".join(lines))
+
+
+async def _resolve_compacted_messages(request: ChatRequest) -> List[ChatMessage]:
+    """Resolve compacted context from summary plus recent turns with deterministic fallback."""
+    if not settings.AI_CONTEXT_COMPACTION_ENABLED:
+        return list(request.messages)
+
+    if request.thread_id is None:
+        return list(request.messages)
+
+    try:
+        async with async_session() as db:
+            repository = ConversationRepository(db)
+            thread = await repository.get_thread(request.thread_id)
+            if thread is None:
+                logger.info(
+                    "ai_context_compaction_fallback",
+                    reason="thread_not_found",
+                    thread_id=str(request.thread_id),
+                )
+                return list(request.messages)
+
+            recent_turns = await repository.list_recent_turns(
+                thread_id=thread.id,
+                limit=settings.AI_CONTEXT_COMPACTION_RECENT_TURNS,
+            )
+            recent_messages = _recent_turns_to_messages(recent_turns)
+
+            latest_summary = await repository.get_latest_summary(thread.id)
+            if latest_summary is None:
+                merged_messages = _merge_retrieved_and_request_messages(recent_messages, request.messages)
+                logger.info(
+                    "ai_context_compaction_fallback",
+                    reason="summary_missing",
+                    thread_id=str(thread.id),
+                    recent_turn_count=len(recent_turns),
+                    merged_message_count=len(merged_messages),
+                )
+                return merged_messages
+
+            parsed_summary = parse_conversation_summary_output(latest_summary.summary_json)
+            if not parsed_summary.success or parsed_summary.parsed is None:
+                merged_messages = _merge_retrieved_and_request_messages(recent_messages, request.messages)
+                logger.warning(
+                    "ai_context_compaction_fallback",
+                    reason="summary_invalid",
+                    thread_id=str(thread.id),
+                    recent_turn_count=len(recent_turns),
+                    merged_message_count=len(merged_messages),
+                )
+                return merged_messages
+
+            summary_message = _build_summary_context_message(parsed_summary.parsed)
+            merged_messages = _merge_retrieved_and_request_messages(
+                [summary_message, *recent_messages],
+                request.messages,
+            )
+
+            logger.info(
+                "ai_context_compaction_applied",
+                thread_id=str(thread.id),
+                summary_from_turn=parsed_summary.parsed.from_turn_index,
+                summary_to_turn=parsed_summary.parsed.to_turn_index,
+                recent_turn_count=len(recent_turns),
+                merged_message_count=len(merged_messages),
+            )
+            return merged_messages
+    except Exception as exc:
+        logger.warning(
+            "ai_context_compaction_exception",
+            error_type=type(exc).__name__,
+        )
+        return list(request.messages)
 
 
 def _resolve_shadow_action(request: ChatRequest, proposal: StructuredModelOutput) -> tuple[str, str]:
@@ -193,6 +360,66 @@ def _resolve_shadow_action(request: ChatRequest, proposal: StructuredModelOutput
         return proposed_action, "accepted"
 
     return "respond", "defaulted"
+
+
+def _resolve_backend_action_metadata(
+    request: ChatRequest,
+    model_content: str,
+    *,
+    reason_hint: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Resolve authoritative action metadata for Phase 5 response rollout."""
+    resolved_action = "respond"
+    resolved_reason = reason_hint or "defaulted"
+    proposed_action: Optional[str] = None
+
+    text = (model_content or "").strip()
+    if not text:
+        resolved_reason = reason_hint or "empty_model_content"
+    else:
+        try:
+            parsed_result = parse_structured_model_output(text, max_repair_attempts=1)
+            if parsed_result.success and parsed_result.parsed is not None:
+                proposed_action = parsed_result.parsed.action
+                resolved_action, resolved_reason = _resolve_shadow_action(request, parsed_result.parsed)
+            else:
+                resolved_reason = reason_hint or "structured_parse_failed"
+        except Exception:
+            resolved_reason = reason_hint or "structured_parse_exception"
+
+    metadata: Dict[str, Any] = {
+        "resolved_action": resolved_action,
+        "resolved_action_reason": resolved_reason,
+        "generation_handoff_allowed": resolved_action == "ready_to_generate",
+        # Phase 5-1 exposes authoritative metadata only; handoff path remains unchanged.
+        "generation_handoff_initiated": False,
+    }
+    if proposed_action is not None:
+        metadata["proposed_action"] = proposed_action
+
+    return metadata
+
+
+def _attach_phase5_response_metadata(
+    request: ChatRequest,
+    base_response: ChatResponse,
+    *,
+    model_content: str,
+    reason_hint: Optional[str] = None,
+):
+    """Attach optional Phase 5 resolved-action fields behind feature flag."""
+    if not settings.AI_RESOLVED_ACTION_RESPONSE_ENABLED:
+        return base_response
+
+    payload = base_response.model_dump(mode="json")
+    payload.update(
+        _resolve_backend_action_metadata(
+            request,
+            model_content,
+            reason_hint=reason_hint,
+        )
+    )
+    return JSONResponse(content=payload)
 
 
 def _record_structured_shadow_metrics(
@@ -338,6 +565,218 @@ def _run_structured_shadow_parse(request: ChatRequest, content: str) -> None:
         )
 
 
+def _derive_idempotency_key(request: ChatRequest) -> str:
+    """Derive a deterministic fallback idempotency key from request payload."""
+    payload = {
+        "thread_id": str(request.thread_id) if request.thread_id else None,
+        "provider": request.provider,
+        "mode": request.mode,
+        "temperature": request.temperature,
+        "max_tokens": request.max_tokens,
+        "messages": [{"role": message.role, "content": message.content} for message in request.messages],
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:64]
+
+
+def _build_non_authoritative_summary_payload(
+    decision: SummaryTriggerDecision,
+    user_message: str,
+    assistant_message: str,
+) -> dict[str, Any]:
+    """Build minimal non-authoritative summary payload for contract validation."""
+    from_turn = int(decision.from_turn_index or 0)
+    to_turn = int(decision.to_turn_index or 0)
+    clean_user = (user_message or "").strip().replace("\n", " ")
+    clean_assistant = (assistant_message or "").strip().replace("\n", " ")
+
+    key_points: List[str] = []
+    if clean_user:
+        key_points.append(f"User: {clean_user[:280]}")
+    if clean_assistant:
+        key_points.append(f"Assistant: {clean_assistant[:280]}")
+
+    return {
+        "version": "1.0",
+        "non_authoritative": True,
+        "from_turn_index": from_turn,
+        "to_turn_index": to_turn,
+        "summary": (
+            f"Non-authoritative summary for turns {from_turn}-{to_turn}. "
+            "Content is stored for later compaction steps and does not alter authoritative state."
+        ),
+        "key_points": key_points,
+        "open_questions": [],
+        "meta": {
+            "source": "deterministic_trigger_stub",
+        },
+    }
+
+
+async def _maybe_persist_non_authoritative_summary(
+    repository: ConversationRepository,
+    thread_id: UUID,
+    turn_index: int,
+    user_message: str,
+    assistant_message: str,
+) -> None:
+    """Persist non-authoritative summary only when deterministic trigger fires."""
+    if not settings.AI_SUMMARIZATION_ENABLED:
+        return
+
+    latest_summary = await repository.get_latest_summary(thread_id)
+    latest_to_turn = int(latest_summary.to_turn_index) if latest_summary is not None else None
+
+    decision = should_trigger_conversation_summary(
+        current_turn_index=turn_index,
+        latest_summary_to_turn_index=latest_to_turn,
+        trigger_every_turns=settings.AI_SUMMARY_TRIGGER_EVERY_TURNS,
+    )
+    if not decision.should_trigger:
+        logger.info(
+            "ai_summary_trigger_skipped",
+            thread_id=str(thread_id),
+            turn_index=turn_index,
+            reason=decision.reason,
+        )
+        return
+
+    candidate = _build_non_authoritative_summary_payload(
+        decision=decision,
+        user_message=user_message,
+        assistant_message=assistant_message,
+    )
+    parsed = parse_conversation_summary_output(candidate)
+    if not parsed.success or parsed.parsed is None:
+        logger.warning(
+            "ai_summary_contract_rejected",
+            thread_id=str(thread_id),
+            turn_index=turn_index,
+            error=parsed.error,
+        )
+        return
+
+    summary_output = parsed.parsed
+    await repository.write_summary(
+        thread_id=thread_id,
+        from_turn_index=summary_output.from_turn_index,
+        to_turn_index=summary_output.to_turn_index,
+        summary_json=summary_output.model_dump(mode="json"),
+        summarizer_version="deterministic-trigger.v1",
+    )
+
+    logger.info(
+        "ai_summary_persisted",
+        thread_id=str(thread_id),
+        from_turn_index=summary_output.from_turn_index,
+        to_turn_index=summary_output.to_turn_index,
+        non_authoritative=summary_output.non_authoritative,
+    )
+
+
+async def _persist_conversation_shadow_state(request: ChatRequest, response: AIResponse) -> None:
+    """Persist canonical conversation thread/turn/snapshot state behind feature flag."""
+    if not settings.AI_STATE_PERSIST_ENABLED:
+        return
+
+    if request.user_id is None:
+        logger.info("ai_conversation_persist_skipped", reason="missing_user_id")
+        return
+
+    idempotency_key = request.idempotency_key or _derive_idempotency_key(request)
+    user_message = _latest_user_message(request)
+
+    try:
+        async with async_session() as db:
+            repository = ConversationRepository(db)
+
+            thread = None
+            if request.thread_id is not None:
+                thread = await repository.get_thread(request.thread_id)
+                if thread is None:
+                    raise ConversationThreadNotFoundError(f"Conversation thread not found: {request.thread_id}")
+            else:
+                thread = await repository.create_thread(
+                    user_id=request.user_id,
+                    project_id=request.project_id,
+                )
+
+            existing_turn = await repository.get_turn_by_idempotency_key(
+                thread_id=thread.id,
+                idempotency_key=idempotency_key,
+            )
+            if existing_turn is not None:
+                await db.rollback()
+                logger.info(
+                    "ai_conversation_persist_idempotent_hit",
+                    thread_id=str(thread.id),
+                    turn_id=str(existing_turn.id),
+                )
+                return
+
+            turn_index = int(thread.last_turn_index) + 1
+            turn = await repository.append_turn(
+                thread_id=thread.id,
+                turn_index=turn_index,
+                user_message=user_message,
+                idempotency_key=idempotency_key,
+                server_response={
+                    "content": response.content,
+                    "provider": response.provider.value,
+                    "model": response.model,
+                    "success": response.success,
+                },
+                model_raw_output={"content": response.content},
+                parse_status="shadow_attempted" if settings.AI_STRUCTURED_SHADOW_ENABLED else "not_attempted",
+                provider=response.provider.value,
+                model=response.model,
+                latency_ms=response.latency_ms,
+                tokens_used=response.tokens_used,
+            )
+
+            authoritative_state = dict(thread.authoritative_state or {})
+            authoritative_state["last_user_message"] = user_message
+            authoritative_state["last_model"] = response.model
+            authoritative_state["last_provider"] = response.provider.value
+            authoritative_state["last_response_success"] = bool(response.success)
+
+            await repository.write_state_snapshot(
+                thread_id=thread.id,
+                expected_version=int(thread.state_version),
+                authoritative_state=authoritative_state,
+                locked_constraints=list(thread.locked_constraints or []),
+                turn_id=turn.id,
+                last_turn_index=turn_index,
+            )
+
+            await _maybe_persist_non_authoritative_summary(
+                repository=repository,
+                thread_id=thread.id,
+                turn_index=turn_index,
+                user_message=user_message,
+                assistant_message=response.content or "",
+            )
+
+            await db.commit()
+            logger.info(
+                "ai_conversation_persisted",
+                thread_id=str(thread.id),
+                turn_id=str(turn.id),
+                state_version=int(thread.state_version),
+            )
+    except ConversationVersionConflictError as e:
+        logger.warning(
+            "ai_conversation_persist_version_conflict",
+            thread_id=str(e.thread_id),
+            expected_version=e.expected_version,
+            current_version=e.current_version,
+        )
+    except ConversationRepositoryError as e:
+        logger.warning("ai_conversation_persist_repository_error", error_type=type(e).__name__)
+    except Exception as e:
+        # Persistence must fail open and never break chat completion behavior.
+        logger.error("ai_conversation_persist_exception", error_type=type(e).__name__)
+
+
 # =============================================================================
 # Endpoints
 # =============================================================================
@@ -381,8 +820,9 @@ async def chat_completion(request: ChatRequest):
             "thinking": AIMode.THINKING,
         }.get(request.mode, AIMode.BALANCED)
         
-        # Build prompt from messages.
-        system_prompt, prompt = _build_chat_prompt(request)
+        # Build prompt from compacted context when enabled.
+        effective_messages = await _resolve_compacted_messages(request)
+        system_prompt, prompt = _build_chat_prompt(request, messages=effective_messages)
         
         # Generate
         response = await asyncio.wait_for(
@@ -399,15 +839,21 @@ async def chat_completion(request: ChatRequest):
         )
 
         _run_structured_shadow_parse(request, response.content or "")
+        await _persist_conversation_shadow_state(request, response)
 
         latency_ms = int((time.monotonic() - start_time) * 1000)
 
         if not response.success or not response.content.strip():
             fallback = _build_chat_fallback(request, response.error or "empty_ai_response")
             fallback.latency_ms = latency_ms
-            return fallback
+            return _attach_phase5_response_metadata(
+                request,
+                fallback,
+                model_content=response.content or "",
+                reason_hint=response.error or "empty_ai_response",
+            )
         
-        return ChatResponse(
+        chat_response = ChatResponse(
             content=response.content,
             provider=response.provider.value,
             model=response.model,
@@ -416,13 +862,30 @@ async def chat_completion(request: ChatRequest):
             tokens_used=response.tokens_used,
             success=response.success,
         )
+        return _attach_phase5_response_metadata(
+            request,
+            chat_response,
+            model_content=response.content or "",
+        )
 
     except asyncio.TimeoutError:
-        return _build_chat_fallback(request, "timeout")
+        fallback = _build_chat_fallback(request, "timeout")
+        return _attach_phase5_response_metadata(
+            request,
+            fallback,
+            model_content="",
+            reason_hint="timeout",
+        )
         
     except Exception as e:
         logger.error("chat_completion_error", error=str(e))
-        return _build_chat_fallback(request, str(e))
+        fallback = _build_chat_fallback(request, str(e))
+        return _attach_phase5_response_metadata(
+            request,
+            fallback,
+            model_content="",
+            reason_hint="chat_completion_exception",
+        )
 
 
 @router.post("/chat/stream")

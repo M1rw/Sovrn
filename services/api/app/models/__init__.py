@@ -12,7 +12,7 @@ from uuid import UUID, uuid4
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
-    Boolean, DateTime, ForeignKey, Integer, String, Text,
+    BigInteger, Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text,
     Enum as SQLEnum, Index, UniqueConstraint
 )
 from sqlalchemy.dialects.postgresql import JSONB, INET, UUID as PGUUID
@@ -403,3 +403,94 @@ class AuditLog(Base):
     ip_address: Mapped[Optional[str]] = mapped_column(INET)
     user_agent: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+# =============================================================================
+# Conversation Persistence
+# =============================================================================
+
+class ConversationThread(Base):
+    """Conversation thread with authoritative state."""
+
+    __tablename__ = "conversation_threads"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    project_id: Mapped[Optional[UUID]] = mapped_column(PGUUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), index=True)
+    status: Mapped[str] = mapped_column(String(30), default="active")
+    state_version: Mapped[int] = mapped_column(BigInteger, default=1)
+    authoritative_state: Mapped[dict] = mapped_column(JSONB, default=dict)
+    locked_constraints: Mapped[list] = mapped_column(JSONB, default=list)
+    last_turn_index: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    turns: Mapped[list["ConversationTurn"]] = relationship("ConversationTurn", back_populates="thread")
+    state_snapshots: Mapped[list["ConversationStateSnapshot"]] = relationship("ConversationStateSnapshot", back_populates="thread")
+    summaries: Mapped[list["ConversationSummary"]] = relationship("ConversationSummary", back_populates="thread")
+
+
+class ConversationTurn(Base):
+    """Conversation turn record with idempotency semantics."""
+
+    __tablename__ = "conversation_turns"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    thread_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("conversation_threads.id", ondelete="CASCADE"), index=True)
+    turn_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    user_message: Mapped[str] = mapped_column(Text, nullable=False)
+    model_raw_output: Mapped[Optional[dict]] = mapped_column(JSONB)
+    server_response: Mapped[dict] = mapped_column(JSONB, default=dict)
+    parse_status: Mapped[str] = mapped_column(String(30), default="not_attempted")
+    provider: Mapped[Optional[str]] = mapped_column(String(50))
+    model: Mapped[Optional[str]] = mapped_column(String(100))
+    latency_ms: Mapped[Optional[int]] = mapped_column(Integer)
+    tokens_used: Mapped[Optional[int]] = mapped_column(Integer)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    thread: Mapped["ConversationThread"] = relationship("ConversationThread", back_populates="turns")
+    state_snapshots: Mapped[list["ConversationStateSnapshot"]] = relationship("ConversationStateSnapshot", back_populates="turn")
+
+    __table_args__ = (
+        UniqueConstraint("thread_id", "turn_index", name="uq_conversation_turns_thread_turn"),
+        UniqueConstraint("thread_id", "idempotency_key", name="uq_conversation_turns_thread_idempotency"),
+    )
+
+
+class ConversationStateSnapshot(Base):
+    """Authoritative state snapshot for deterministic versioning."""
+
+    __tablename__ = "conversation_state_snapshots"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    thread_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("conversation_threads.id", ondelete="CASCADE"), index=True)
+    turn_id: Mapped[Optional[UUID]] = mapped_column(PGUUID(as_uuid=True), ForeignKey("conversation_turns.id", ondelete="SET NULL"), index=True)
+    state_version: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    authoritative_state: Mapped[dict] = mapped_column(JSONB, default=dict)
+    locked_constraints: Mapped[list] = mapped_column(JSONB, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    thread: Mapped["ConversationThread"] = relationship("ConversationThread", back_populates="state_snapshots")
+    turn: Mapped[Optional["ConversationTurn"]] = relationship("ConversationTurn", back_populates="state_snapshots")
+
+    __table_args__ = (
+        UniqueConstraint("thread_id", "state_version", name="uq_conversation_state_snapshots_thread_version"),
+    )
+
+
+class ConversationSummary(Base):
+    """Non-authoritative summary records for context compression."""
+
+    __tablename__ = "conversation_summaries"
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    thread_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("conversation_threads.id", ondelete="CASCADE"), index=True)
+    from_turn_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    to_turn_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    summary_json: Mapped[dict] = mapped_column(JSONB, default=dict)
+    summarizer_version: Mapped[Optional[str]] = mapped_column(String(50))
+    quality_score: Mapped[Optional[float]] = mapped_column(Numeric(5, 4))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    thread: Mapped["ConversationThread"] = relationship("ConversationThread", back_populates="summaries")

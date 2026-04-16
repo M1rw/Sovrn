@@ -1,5 +1,19 @@
 # SOVRN Build Complete - Documentation Index
 
+## Canonical Documentation Entry Points
+
+Use these files first for the current, canonical understanding of SOVRN:
+
+- [SOVRN_OVERVIEW.md](SOVRN_OVERVIEW.md)
+- [ARCHITECTURE.md](ARCHITECTURE.md)
+- [ROADMAP.md](ROADMAP.md)
+- [TODO.md](TODO.md)
+- [DECISIONS.md](DECISIONS.md)
+
+## Legacy Documentation Note
+
+This index captures a historical build snapshot. It is preserved for auditability and context, but status claims here may be superseded by the canonical entry points above.
+
 ## 🎉 Status: ✅ BUILD SUCCESSFUL - ALL SERVICES RUNNING
 
 **Date:** January 3, 2026  
@@ -19,21 +33,21 @@
   - Common commands
 
 ### Build Details
-- **[BUILD_EXECUTION_REPORT.md](BUILD_EXECUTION_REPORT.md)** - Complete build details
+- **[BUILD_EXECUTION_REPORT.md](legacy/status/BUILD_EXECUTION_REPORT.md)** - Complete build details
   - All issues encountered and fixed
   - Service status and metrics
   - Deployment architecture
   - Troubleshooting guide
 
-- **[PHASE_2_STATUS.md](PHASE_2_STATUS.md)** - Phase 2 completion report
+- **[PHASE_2_STATUS.md](legacy/status/PHASE_2_STATUS.md)** - Phase 2 completion report
   - Executive summary
   - What was accomplished
   - Service status report
   - Ready for Phase 3 checklist
 
 ### Previous Documentation
-- **[PHASE_1_COMPLETE.md](PHASE_1_COMPLETE.md)** - Phase 1 completion (code implementation)
-- **[BUILD_COMPLETE.md](BUILD_COMPLETE.md)** - Build framework documentation
+- **[PHASE_1_COMPLETE.md](legacy/status/PHASE_1_COMPLETE.md)** - Phase 1 completion (code implementation)
+- **[BUILD_COMPLETE.md](legacy/status/BUILD_COMPLETE.md)** - Build framework documentation
 - **[BUILD_GUIDE.md](BUILD_GUIDE.md)** - Build automation guide
 - **[docs/INDEX.md](docs/INDEX.md)** - Architecture & API reference
 - **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** - Deployment instructions
@@ -210,14 +224,14 @@ docker-compose logs infer
 # May need to download a model first
 ```
 
-See **[BUILD_EXECUTION_REPORT.md](BUILD_EXECUTION_REPORT.md)** for detailed troubleshooting.
+See **[BUILD_EXECUTION_REPORT.md](legacy/status/BUILD_EXECUTION_REPORT.md)** for detailed troubleshooting.
 
 ---
 
 ## 📞 Support Resources
 
 - **API Documentation**: http://localhost:8000/docs (when running)
-- **Technical Details**: [BUILD_EXECUTION_REPORT.md](BUILD_EXECUTION_REPORT.md)
+- **Technical Details**: [BUILD_EXECUTION_REPORT.md](legacy/status/BUILD_EXECUTION_REPORT.md)
 - **Getting Started**: [QUICK_START.md](QUICK_START.md)
 - **Architecture**: [docs/INDEX.md](docs/INDEX.md)
 - **Deployment**: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
