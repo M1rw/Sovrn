@@ -1,5 +1,19 @@
 # SOVRN - Sovereign AI Website Builder
 
+## Canonical Documentation Entry Points
+
+Use these files first for the current, canonical understanding of SOVRN:
+
+- [SOVRN_OVERVIEW.md](SOVRN_OVERVIEW.md)
+- [ARCHITECTURE.md](ARCHITECTURE.md)
+- [ROADMAP.md](ROADMAP.md)
+- [TODO.md](TODO.md)
+- [DECISIONS.md](DECISIONS.md)
+
+## Legacy Documentation Note
+
+Some older documents in this repository are historical snapshots or exploratory planning notes and may contain deprecated or conflicting status statements. Keep them as historical context; use the canonical entry points above for current interpretation.
+
 > 100% offline, self-hosted AI website builder that beats cloud competitors.
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -12,7 +26,7 @@
 **January 3, 2026** - Three-Agent Pipeline Fully Implemented  
 ✅ Strategist Agent | ✅ Designer Agent | ✅ Engineer Agent | ✅ Build Scripts | ✅ Complete Documentation
 
-See [PHASE_1_COMPLETE.md](PHASE_1_COMPLETE.md) for full details.
+See [PHASE_1_COMPLETE.md](legacy/status/PHASE_1_COMPLETE.md) for full details.
 
 ## Overview
 
@@ -76,7 +90,7 @@ bash scripts/build.sh
 ## 📚 Complete Documentation
 
 - **[BUILD_GUIDE.md](docs/BUILD_GUIDE.md)** - Complete setup and build guide
-- **[PHASE_1_COMPLETE.md](PHASE_1_COMPLETE.md)** - What's implemented, roadmap
+- **[PHASE_1_COMPLETE.md](legacy/status/PHASE_1_COMPLETE.md)** - What's implemented, roadmap
 - **[SYSTEM_ARCHITECTURE.md](docs/SYSTEM_ARCHITECTURE.md)** - Technical architecture
 - **[QUICK_REFERENCE.md](docs/QUICK_REFERENCE.md)** - Commands and troubleshooting
 - **[COMPETITIVE_ANALYSIS.md](docs/COMPETITIVE_ANALYSIS.md)** - Market analysis

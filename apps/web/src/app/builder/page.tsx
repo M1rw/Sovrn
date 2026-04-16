@@ -78,6 +78,15 @@ interface ChatHistory {
   hasWebsite?: boolean;
 }
 
+interface BuilderChatApiResponse {
+  content: string;
+  resolvedAction?: string;
+  generationHandoffAllowed?: boolean;
+}
+
+const FRONTEND_RESOLVED_ACTION_ENABLED =
+  process.env.NEXT_PUBLIC_BUILDER_RESOLVED_ACTION_ENABLED === 'true';
+
 // Animations
 const styles = `
 @keyframes cursor-blink {
@@ -250,19 +259,30 @@ export default function BuilderPage() {
     }));
   };
 
-  const getAIResponse = async (userMessage: string): Promise<string> => {
+  const getAIResponse = async (userMessage: string): Promise<BuilderChatApiResponse> => {
     const conversationHistory = buildConversationContext();
     conversationHistory.push({ role: 'user', content: userMessage });
-    
-    try {
-      const response = await fetch('/api/v1/ai/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [
-            {
-              role: 'system',
-              content: `You are SOVRN, a friendly and intelligent AI assistant that helps users build websites. You can also have normal conversations.
+
+    const systemPrompt = FRONTEND_RESOLVED_ACTION_ENABLED
+      ? `You are SOVRN, a friendly and intelligent AI assistant that helps users build websites.
+
+Return only valid JSON matching this schema:
+{
+  "version": "1.0",
+  "action": "respond" | "ask_clarification" | "ready_to_generate" | "propose_revision" | "error_recoverable",
+  "assistant_message": "string",
+  "questions": ["string"],
+  "generation_request": { "brief": "string" } | null,
+  "revision_request": null,
+  "state_patch": {},
+  "meta": { "source": "builder" }
+}
+
+Rules:
+- Use action "ready_to_generate" only when you have enough detail to build the site now.
+- Keep assistant_message concise and user-friendly.
+- If action is "ready_to_generate", include generation_request.brief.`
+      : `You are SOVRN, a friendly and intelligent AI assistant that helps users build websites. You can also have normal conversations.
 
 Your capabilities:
 - Chat naturally about any topic
@@ -280,24 +300,50 @@ Example for website generation:
 User: "I want a coffee shop website"
 You: "Nice! What style - modern, cozy, minimal? Any specific sections like menu, about, contact?"
 User: "Modern with a menu and contact form"
-You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu display, and contact form"`
+You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu display, and contact form"`;
+    
+    try {
+      const response = await fetch('/api/v1/ai/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [
+            {
+              role: 'system',
+              content: systemPrompt
             },
             ...conversationHistory
           ],
           temperature: 0.7,
-          max_tokens: 512
+          max_tokens: 512,
+          json_mode: FRONTEND_RESOLVED_ACTION_ENABLED,
         })
       });
 
       if (response.ok) {
-        const data = await response.json();
-        return data.content || "I'm having trouble thinking right now. Could you try again?";
+        const data = await response.json() as {
+          content?: unknown;
+          resolved_action?: unknown;
+          generation_handoff_allowed?: unknown;
+        };
+        return {
+          content: typeof data.content === 'string'
+            ? data.content
+            : "I'm having trouble thinking right now. Could you try again?",
+          resolvedAction: typeof data.resolved_action === 'string' ? data.resolved_action : undefined,
+          generationHandoffAllowed:
+            typeof data.generation_handoff_allowed === 'boolean'
+              ? data.generation_handoff_allowed
+              : undefined,
+        };
       }
     } catch (error) {
       console.error('AI chat error:', error);
     }
     
-    return "I'm here to help! Tell me what you'd like to create or just chat.";
+    return {
+      content: "I'm here to help! Tell me what you'd like to create or just chat.",
+    };
   };
 
   const generateWebsite = async (
@@ -430,15 +476,55 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
     const aiResponse = await getAIResponse(messageText);
     
     setIsThinking(false);
-    
-    const shouldGenerate = aiResponse.includes('GENERATE_WEBSITE:');
-    let displayResponse = aiResponse;
+
+    const content = aiResponse.content || '';
+    let shouldGenerate = false;
+    let displayResponse = content;
     let generatePrompt = '';
-    
-    if (shouldGenerate) {
-      const parts = aiResponse.split('GENERATE_WEBSITE:');
-      displayResponse = parts[0].trim();
-      generatePrompt = parts[1]?.trim() || messageText;
+
+    if (FRONTEND_RESOLVED_ACTION_ENABLED) {
+      let structuredAssistantMessage: string | undefined;
+      let structuredGenerationBrief: string | undefined;
+
+      try {
+        const parsed = JSON.parse(content) as {
+          assistant_message?: unknown;
+          generation_request?: unknown;
+        };
+
+        if (typeof parsed.assistant_message === 'string' && parsed.assistant_message.trim()) {
+          structuredAssistantMessage = parsed.assistant_message.trim();
+        }
+
+        const generationRequest = parsed.generation_request;
+        if (generationRequest && typeof generationRequest === 'object' && !Array.isArray(generationRequest)) {
+          const brief = (generationRequest as { brief?: unknown }).brief;
+          if (typeof brief === 'string' && brief.trim()) {
+            structuredGenerationBrief = brief.trim();
+          }
+        }
+      } catch {
+        // Keep raw content display when the model response is not valid JSON.
+      }
+
+      displayResponse = structuredAssistantMessage || content;
+      shouldGenerate =
+        aiResponse.resolvedAction === 'ready_to_generate' &&
+        aiResponse.generationHandoffAllowed === true;
+      generatePrompt = shouldGenerate
+        ? (structuredGenerationBrief || messageText)
+        : '';
+    } else {
+      const sentinelGenerate = content.includes('GENERATE_WEBSITE:');
+      const sentinelParts = sentinelGenerate ? content.split('GENERATE_WEBSITE:') : [];
+      const sentinelDisplayResponse = sentinelGenerate ? sentinelParts[0].trim() : content;
+      const sentinelGeneratePrompt = sentinelGenerate ? (sentinelParts[1]?.trim() || messageText) : '';
+
+      shouldGenerate = sentinelGenerate;
+      displayResponse = sentinelDisplayResponse;
+      generatePrompt = shouldGenerate
+        ? (sentinelGeneratePrompt || messageText)
+        : '';
     }
 
     // Show AI response if there's one before generation
