@@ -100,6 +100,28 @@ class Settings(BaseSettings):
     AI_SHADOW_MAX_REPAIR_RATE: float = Field(default=0.08, ge=0, le=1)
     AI_SHADOW_MAX_PARSE_FAILURE_RATE: float = Field(default=0.005, ge=0, le=1)
     AI_SHADOW_MAX_ACTION_MISMATCH_RATE: float = Field(default=0.20, ge=0, le=1)
+
+    # ==========================================================================
+    # AI Conversation Persistence
+    # ==========================================================================
+    AI_STATE_PERSIST_ENABLED: bool = False
+
+    # ==========================================================================
+    # AI Conversation Summarization (Non-Authoritative)
+    # ==========================================================================
+    AI_SUMMARIZATION_ENABLED: bool = False
+    AI_SUMMARY_TRIGGER_EVERY_TURNS: int = Field(default=6, ge=1, le=1000)
+
+    # ==========================================================================
+    # AI Context Compaction (Summary + Recent Turns)
+    # ==========================================================================
+    AI_CONTEXT_COMPACTION_ENABLED: bool = False
+    AI_CONTEXT_COMPACTION_RECENT_TURNS: int = Field(default=4, ge=1, le=50)
+
+    # ==========================================================================
+    # AI Phase 5 Response Contract Rollout
+    # ==========================================================================
+    AI_RESOLVED_ACTION_RESPONSE_ENABLED: bool = False
     
     # ==========================================================================
     # Sparks (Monetization)
