@@ -95,6 +95,21 @@ def test_propose_revision_passes_with_revision_intent_and_scope() -> None:
     assert metadata["resolved_action_reason"] == "revision_gate_passed"
 
 
+def test_propose_revision_passes_for_failure_report_with_scope() -> None:
+    metadata = ai._resolve_backend_action_metadata(
+        _request("Failed to find pull request #14 after delegation."),
+        _structured_content(
+            action="propose_revision",
+            revision_request={
+                "change_summary": "Fix delegated PR lookup fallback",
+                "targets": ["delegation", "pull_request_lookup"],
+            },
+        ),
+    )
+    assert metadata["resolved_action"] == "propose_revision"
+    assert metadata["resolved_action_reason"] == "revision_gate_passed"
+
+
 def test_propose_revision_falls_back_without_revision_scope() -> None:
     metadata = ai._resolve_backend_action_metadata(
         _request("please revise the layout"),
