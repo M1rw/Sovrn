@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
@@ -391,3 +391,208 @@ async def test_stream_preview_events_accepts_bearer_preview_token(
     update_payload = _sse_payload_from_frame(frames[1])
     assert update_payload["generation_id"] == str(generation_id)
     assert update_payload["entrypoint"] == entrypoint
+
+
+@pytest.mark.asyncio
+async def test_get_preview_artifact_accepts_preview_session_bearer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_id = UUID("00000000-0000-0000-0000-000000000222")
+    generation_id = UUID("00000000-0000-0000-0000-000000000333")
+    entrypoint = "index.html"
+    preview_token, _ = create_preview_session_token(
+        subject="00000000-0000-0000-0000-000000000111",
+        project_id=str(project_id),
+        generation_id=str(generation_id),
+        entrypoint=entrypoint,
+        expires_delta=timedelta(minutes=5),
+    )
+
+    project = SimpleNamespace(id=project_id)
+    generation = SimpleNamespace(
+        id=generation_id,
+        version=5,
+        files=[
+            {
+                "path": entrypoint,
+                "content": "<html><body>Artifact preview</body></html>",
+                "language": "html",
+            }
+        ],
+        code_output={},
+    )
+
+    async def _fake_get_project(project_id: UUID, db):
+        _ = db
+        assert project_id == project.id
+        return project
+
+    async def _fake_get_preview_generation(project_id: UUID, db, generation_id: UUID | None = None):
+        _ = db
+        assert project_id == project.id
+        assert generation_id == generation.id
+        return generation
+
+    monkeypatch.setattr(projects, "_get_project", _fake_get_project)
+    monkeypatch.setattr(projects, "_get_preview_generation", _fake_get_preview_generation)
+
+    response = await projects.get_preview_artifact(
+        project_id=project_id,
+        generation_id=generation_id,
+        entrypoint=entrypoint,
+        user=None,
+        credentials=HTTPAuthorizationCredentials(scheme="Bearer", credentials=preview_token),
+        db=None,
+    )
+
+    assert response.project_id == project_id
+    assert response.generation_id == generation_id
+    assert response.generation_version == 5
+    assert response.entrypoint == entrypoint
+    assert response.preview_html == "<html><body>Artifact preview</body></html>"
+    assert response.source == "site_generation"
+    assert response.files and response.files[0].path == "index.html"
+
+
+@pytest.mark.asyncio
+async def test_get_preview_artifact_rejects_mismatched_generation_for_preview_token() -> None:
+    project_id = UUID("00000000-0000-0000-0000-000000000222")
+    claimed_generation_id = UUID("00000000-0000-0000-0000-000000000333")
+    mismatched_generation_id = UUID("00000000-0000-0000-0000-000000000444")
+    preview_token, _ = create_preview_session_token(
+        subject="00000000-0000-0000-0000-000000000111",
+        project_id=str(project_id),
+        generation_id=str(claimed_generation_id),
+        entrypoint="index.html",
+        expires_delta=timedelta(minutes=5),
+    )
+
+    with pytest.raises(HTTPException) as mismatch:
+        await projects.get_preview_artifact(
+            project_id=project_id,
+            generation_id=mismatched_generation_id,
+            entrypoint="index.html",
+            user=None,
+            credentials=HTTPAuthorizationCredentials(scheme="Bearer", credentials=preview_token),
+            db=None,
+        )
+
+    assert mismatch.value.status_code == 403
+    assert mismatch.value.detail == "Preview session token is not valid for generation"
+
+
+@pytest.mark.asyncio
+async def test_create_preview_session_clamps_ttl_to_configured_max(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_id = UUID("00000000-0000-0000-0000-000000000222")
+    generation_id = UUID("00000000-0000-0000-0000-000000000333")
+    user_id = UUID("00000000-0000-0000-0000-000000000111")
+    project = SimpleNamespace(id=project_id)
+    generation = SimpleNamespace(id=generation_id)
+    captured: dict[str, object] = {}
+
+    async def _fake_get_project_for_user(project_id: UUID, user_id: UUID, db):
+        _ = db
+        assert project_id == project.id
+        assert user_id == UUID("00000000-0000-0000-0000-000000000111")
+        return project
+
+    async def _fake_get_preview_generation(project_id: UUID, db, generation_id: UUID | None = None):
+        _ = db
+        assert project_id == project.id
+        assert generation_id == generation.id
+        return generation
+
+    def _fake_create_preview_session_token(
+        *,
+        subject: str,
+        project_id: str,
+        generation_id: str,
+        entrypoint: str,
+        expires_delta: timedelta,
+        additional_claims: dict[str, str],
+    ):
+        captured["subject"] = subject
+        captured["project_id"] = project_id
+        captured["generation_id"] = generation_id
+        captured["entrypoint"] = entrypoint
+        captured["ttl_seconds"] = int(expires_delta.total_seconds())
+        captured["scope"] = additional_claims.get("scope")
+        return (
+            "preview-session-token",
+            datetime(2026, 4, 17, 12, 0, tzinfo=timezone.utc),
+        )
+
+    monkeypatch.setattr(projects, "_get_project_for_user", _fake_get_project_for_user)
+    monkeypatch.setattr(projects, "_get_preview_generation", _fake_get_preview_generation)
+    monkeypatch.setattr(projects, "create_preview_session_token", _fake_create_preview_session_token)
+
+    response = await projects.create_preview_session(
+        project_id=project_id,
+        request=projects.PreviewSessionRequest(
+            generation_id=generation_id,
+            entrypoint="index.html",
+            ttl_seconds=settings.PREVIEW_SESSION_TOKEN_MAX_TTL_SECONDS + 500,
+        ),
+        user=SimpleNamespace(id=user_id),
+        db=None,
+    )
+
+    assert response.token == "preview-session-token"
+    assert response.project_id == project_id
+    assert response.generation_id == generation_id
+    assert response.entrypoint == "index.html"
+    assert response.artifact_endpoint == (
+        f"/api/v1/projects/{project_id}/preview-artifact"
+        f"?generation_id={generation_id}&entrypoint=index.html"
+    )
+    assert captured["subject"] == str(user_id)
+    assert captured["project_id"] == str(project_id)
+    assert captured["generation_id"] == str(generation_id)
+    assert captured["entrypoint"] == "index.html"
+    assert captured["ttl_seconds"] == settings.PREVIEW_SESSION_TOKEN_MAX_TTL_SECONDS
+    assert captured["scope"] == "preview_runtime_bootstrap"
+
+
+@pytest.mark.asyncio
+async def test_verify_preview_session_supports_userless_token_verification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_id = UUID("00000000-0000-0000-0000-000000000222")
+    generation_id = UUID("00000000-0000-0000-0000-000000000333")
+    entrypoint = "preview/custom.html"
+    preview_token, _ = create_preview_session_token(
+        subject="00000000-0000-0000-0000-000000000111",
+        project_id=str(project_id),
+        generation_id=str(generation_id),
+        entrypoint=entrypoint,
+        expires_delta=timedelta(minutes=5),
+    )
+
+    async def _fake_get_project(project_id: UUID, db):
+        _ = db
+        return SimpleNamespace(id=project_id)
+
+    monkeypatch.setattr(projects, "_get_project", _fake_get_project)
+
+    response = await projects.verify_preview_session(
+        project_id=project_id,
+        request=projects.PreviewSessionVerifyRequest(
+            token=preview_token,
+            generation_id=None,
+            entrypoint=entrypoint,
+        ),
+        user=None,
+        db=None,
+    )
+
+    assert response.valid is True
+    assert response.project_id == project_id
+    assert response.generation_id == generation_id
+    assert response.entrypoint == entrypoint
+    assert response.token_type == "preview_session"
+    assert response.artifact_endpoint == (
+        f"/api/v1/projects/{project_id}/preview-artifact"
+        f"?generation_id={generation_id}&entrypoint=preview/custom.html"
+    )

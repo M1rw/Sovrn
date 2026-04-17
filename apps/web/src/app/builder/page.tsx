@@ -54,17 +54,18 @@ import {
   recordRequestMetric,
   recordUiError,
 } from '@/lib/telemetry';
+import {
+  getPreviewStreamFallbackMessage,
+  getPreviewStreamStateOnError,
+  shouldMarkPreviewStreamStale,
+  toMountDescriptorFromArtifact,
+  toMountDescriptorFromPreviewUpdate,
+  type GeneratedFile,
+  type PreviewStreamState,
+} from './preview-lifecycle';
 
 type ViewMode = 'preview' | 'code';
 type PreviewBridgeState = 'idle' | 'pending' | 'connected' | 'failed';
-type PreviewStreamState = 'idle' | 'connecting' | 'live' | 'stale' | 'disconnected' | 'error';
-
-interface GeneratedFile {
-  name: string;
-  content: string;
-  type: string;
-  size: number;
-}
 
 interface Message {
   id: string;
@@ -111,21 +112,6 @@ interface BuilderChatApiResponse {
   };
 }
 
-interface PreviewStreamUpdatePayload {
-  project_id: string;
-  generation_id: string;
-  generation_version: number;
-  entrypoint: string;
-  preview_html: string;
-  artifact_endpoint: string;
-  files: Array<{
-    path: string;
-    content: string;
-    language?: string;
-    size_bytes?: number;
-  }>;
-}
-
 type BuilderResolvedAction =
   | 'respond'
   | 'ask_clarification'
@@ -160,14 +146,6 @@ const parseIntegerField = (value: unknown): number | undefined =>
 
 const createClientIdempotencyKey = (): string =>
   `builder-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
-
-const inferFileTypeFromPath = (filePath: string): string => {
-  const extension = filePath.split('.').pop()?.toLowerCase() || 'txt';
-  if (extension === 'js') {
-    return 'javascript';
-  }
-  return extension;
-};
 
 // Animations
 const styles = `
@@ -393,14 +371,16 @@ export default function BuilderPage() {
           return;
         }
 
+        const artifactMount = toMountDescriptorFromArtifact(
+          artifact,
+          verifiedSession.entrypoint,
+          generatedHtml
+        );
+
         const mounted = await mountWorkspace({
-          files: artifact.files.map((file) => ({
-            path: file.path,
-            content: file.content,
-            language: file.language || inferFileTypeFromPath(file.path),
-          })),
-          entrypoint: verifiedSession.entrypoint,
-          fallbackHtml: artifact.preview_html || generatedHtml,
+          files: artifactMount.mountFiles,
+          entrypoint: artifactMount.entrypoint,
+          fallbackHtml: artifactMount.fallbackHtml,
         });
 
         if (!isCancelled) {
@@ -492,26 +472,9 @@ export default function BuilderPage() {
 
     const handlePreviewUpdated = (event: MessageEvent<string>) => {
       try {
-        const payload = JSON.parse(event.data) as PreviewStreamUpdatePayload;
-        const incomingFiles = Array.isArray(payload.files) ? payload.files : [];
-        const nextGeneratedFiles: GeneratedFile[] = incomingFiles.map((file, index) => {
-          const path = typeof file.path === 'string' && file.path.trim() ? file.path : `file-${index}.txt`;
-          const content = typeof file.content === 'string' ? file.content : '';
-          const size =
-            typeof file.size_bytes === 'number' && Number.isFinite(file.size_bytes)
-              ? file.size_bytes
-              : new TextEncoder().encode(content).length;
-
-          return {
-            name: path,
-            content,
-            type:
-              typeof file.language === 'string' && file.language.trim()
-                ? file.language
-                : inferFileTypeFromPath(path),
-            size,
-          };
-        });
+        const payload = JSON.parse(event.data) as unknown;
+        const updateMount = toMountDescriptorFromPreviewUpdate(payload);
+        const nextGeneratedFiles = updateMount.generatedFiles;
 
         if (nextGeneratedFiles.length > 0) {
           setGeneratedFiles(nextGeneratedFiles);
@@ -523,26 +486,16 @@ export default function BuilderPage() {
           );
         }
 
-        const nextHtml =
-          typeof payload.preview_html === 'string' && payload.preview_html.trim()
-            ? payload.preview_html
-            : '';
+        const nextHtml = updateMount.nextGeneratedHtml;
         if (nextHtml) {
           previewUpdateStartedAtRef.current = Date.now();
           setGeneratedHtml(nextHtml);
         }
 
         void mountWorkspace({
-          files: nextGeneratedFiles.map((file) => ({
-            path: file.name,
-            content: file.content,
-            language: file.type,
-          })),
-          entrypoint:
-            typeof payload.entrypoint === 'string' && payload.entrypoint.trim()
-              ? payload.entrypoint
-              : 'index.html',
-          fallbackHtml: nextHtml || undefined,
+          files: updateMount.mountFiles,
+          entrypoint: updateMount.entrypoint,
+          fallbackHtml: updateMount.fallbackHtml,
         });
 
         setPreviewBridgeState('pending');
@@ -558,9 +511,7 @@ export default function BuilderPage() {
     };
 
     const handleStreamError = () => {
-      setPreviewStreamState(
-        eventSource.readyState === EventSource.CLOSED ? 'disconnected' : 'error'
-      );
+      setPreviewStreamState(getPreviewStreamStateOnError(eventSource.readyState));
     };
 
     eventSource.addEventListener('heartbeat', handleHeartbeat as EventListener);
@@ -591,8 +542,13 @@ export default function BuilderPage() {
     }
 
     const intervalId = window.setInterval(() => {
-      const elapsed = Date.now() - previewStreamLastEventAt;
-      if (elapsed >= PREVIEW_STREAM_STALE_THRESHOLD_MS) {
+      if (
+        shouldMarkPreviewStreamStale(
+          previewStreamLastEventAt,
+          Date.now(),
+          PREVIEW_STREAM_STALE_THRESHOLD_MS
+        )
+      ) {
         setPreviewStreamState((current) => (current === 'live' ? 'stale' : current));
       }
     }, 1000);
@@ -1280,14 +1236,7 @@ Rules:
     clearMountedWorkspace();
   };
 
-  const streamFallbackMessage =
-    previewStreamState === 'stale'
-      ? 'Live preview stream is stale. New updates may be delayed.'
-      : previewStreamState === 'disconnected'
-        ? 'Live preview stream disconnected. Reconnect to resume incremental updates.'
-        : previewStreamState === 'error'
-          ? 'Live preview stream encountered an error. Reconnect to recover updates.'
-          : null;
+  const streamFallbackMessage = getPreviewStreamFallbackMessage(previewStreamState);
 
   const isNewChat = messages.length === 0;
 
