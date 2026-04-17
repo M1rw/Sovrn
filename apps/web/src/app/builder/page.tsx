@@ -38,9 +38,26 @@ import {
   MessageSquare,
   Settings,
 } from 'lucide-react';
-import { jobsApi, projectsApi, resolveCanonicalJobResult, type Job } from '@/lib/api';
+import {
+  buildPreviewEventsStreamPath,
+  jobsApi,
+  projectsApi,
+  resolveCanonicalJobResult,
+  type Job,
+  type PreviewSessionResponse,
+} from '@/lib/api';
+import { usePreviewRuntime } from '@/hooks/use-preview-runtime';
+import {
+  createCorrelationId,
+  getClientSessionId,
+  recordClientMetric,
+  recordRequestMetric,
+  recordUiError,
+} from '@/lib/telemetry';
 
 type ViewMode = 'preview' | 'code';
+type PreviewBridgeState = 'idle' | 'pending' | 'connected' | 'failed';
+type PreviewStreamState = 'idle' | 'connecting' | 'live' | 'stale' | 'disconnected' | 'error';
 
 interface GeneratedFile {
   name: string;
@@ -60,6 +77,8 @@ interface Message {
   isTask?: boolean;
   taskStatus?: 'running' | 'completed';
   generatedFiles?: { name: string; size: string; type: string }[];
+  resolvedAction?: BuilderResolvedAction;
+  actionReason?: string;
 }
 
 interface TaskStep {
@@ -80,12 +99,75 @@ interface ChatHistory {
 
 interface BuilderChatApiResponse {
   content: string;
-  resolvedAction?: string;
+  resolvedAction?: BuilderResolvedAction;
+  resolvedActionReason?: string;
+  proposedAction?: BuilderResolvedAction;
   generationHandoffAllowed?: boolean;
+  conversationMeta?: {
+    threadId?: string;
+    turnIndex?: number;
+    stateVersion?: number;
+    idempotencyKey?: string;
+  };
 }
 
+interface PreviewStreamUpdatePayload {
+  project_id: string;
+  generation_id: string;
+  generation_version: number;
+  entrypoint: string;
+  preview_html: string;
+  artifact_endpoint: string;
+  files: Array<{
+    path: string;
+    content: string;
+    language?: string;
+    size_bytes?: number;
+  }>;
+}
+
+type BuilderResolvedAction =
+  | 'respond'
+  | 'ask_clarification'
+  | 'ready_to_generate'
+  | 'propose_revision'
+  | 'error_recoverable';
+
 const FRONTEND_RESOLVED_ACTION_ENABLED =
-  process.env.NEXT_PUBLIC_BUILDER_RESOLVED_ACTION_ENABLED === 'true';
+  process.env.NEXT_PUBLIC_BUILDER_RESOLVED_ACTION_ENABLED !== 'false';
+const FRONTEND_CONVERSATION_STATE_ENABLED =
+  process.env.NEXT_PUBLIC_BUILDER_CONVERSATION_STATE_ENABLED === 'true';
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const ALLOWED_RESOLVED_ACTIONS: ReadonlySet<BuilderResolvedAction> = new Set([
+  'respond',
+  'ask_clarification',
+  'ready_to_generate',
+  'propose_revision',
+  'error_recoverable',
+]);
+const PREVIEW_BRIDGE_FLAG = '__sovrnPreviewBridge';
+const PREVIEW_STREAM_STALE_THRESHOLD_MS = 6000;
+
+const isUuid = (value: unknown): value is string =>
+  typeof value === 'string' && UUID_PATTERN.test(value);
+
+const isResolvedAction = (value: unknown): value is BuilderResolvedAction =>
+  typeof value === 'string' && ALLOWED_RESOLVED_ACTIONS.has(value as BuilderResolvedAction);
+
+const parseIntegerField = (value: unknown): number | undefined =>
+  typeof value === 'number' && Number.isInteger(value) ? value : undefined;
+
+const createClientIdempotencyKey = (): string =>
+  `builder-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
+
+const inferFileTypeFromPath = (filePath: string): string => {
+  const extension = filePath.split('.').pop()?.toLowerCase() || 'txt';
+  if (extension === 'js') {
+    return 'javascript';
+  }
+  return extension;
+};
 
 // Animations
 const styles = `
@@ -166,6 +248,30 @@ export default function BuilderPage() {
   const [greeting, setGreeting] = useState('Hello');
   const [taskSteps, setTaskSteps] = useState<TaskStep[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [conversationThreadId, setConversationThreadId] = useState<string | null>(null);
+  const [conversationTurnIndex, setConversationTurnIndex] = useState<number | null>(null);
+  const [conversationStateVersion, setConversationStateVersion] = useState<number | null>(null);
+  const [previewBootstrapSession, setPreviewBootstrapSession] = useState<PreviewSessionResponse | null>(null);
+  const [previewBridgeState, setPreviewBridgeState] = useState<PreviewBridgeState>('idle');
+  const [previewBridgeLastEventAt, setPreviewBridgeLastEventAt] = useState<number | null>(null);
+  const [previewStreamState, setPreviewStreamState] = useState<PreviewStreamState>('idle');
+  const [previewStreamLastEventAt, setPreviewStreamLastEventAt] = useState<number | null>(null);
+  const [previewStreamReconnectNonce, setPreviewStreamReconnectNonce] = useState(0);
+  const [editorDrafts, setEditorDrafts] = useState<Record<string, string>>({});
+  const [isApplyingEditorPatch, setIsApplyingEditorPatch] = useState(false);
+  const [editorBridgeLastAppliedAt, setEditorBridgeLastAppliedAt] = useState<number | null>(null);
+  const [isRestartingPreviewRuntime, setIsRestartingPreviewRuntime] = useState(false);
+  const {
+    kind: previewRuntimeKind,
+    status: previewRuntimeStatus,
+    detail: previewRuntimeDetail,
+    previewUrl: previewRuntimeUrl,
+    bridgeChannel: previewRuntimeBridgeChannel,
+    mountedFileCount: previewRuntimeMountedFileCount,
+    boot: bootPreviewRuntime,
+    mountWorkspace,
+    clearMountedWorkspace,
+  } = usePreviewRuntime();
   const [chatHistory] = useState<ChatHistory[]>([
     { id: '1', title: 'Coffee Shop Website', preview: 'Modern coffee shop with menu...', timestamp: new Date(Date.now() - 86400000), hasWebsite: true },
     { id: '2', title: 'Portfolio Design', preview: 'Minimal portfolio with projects...', timestamp: new Date(Date.now() - 172800000), hasWebsite: true },
@@ -175,6 +281,8 @@ export default function BuilderPage() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const previewEventSourceRef = useRef<EventSource | null>(null);
+  const previewUpdateStartedAtRef = useRef<number | null>(null);
 
   // Get time-based greeting - only on client
   const getGreeting = () => {
@@ -205,6 +313,10 @@ export default function BuilderPage() {
   }, []);
 
   useEffect(() => {
+    void bootPreviewRuntime();
+  }, [bootPreviewRuntime]);
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
@@ -214,6 +326,281 @@ export default function BuilderPage() {
       inputRef.current.style.height = `${Math.min(inputRef.current.scrollHeight, 150)}px`;
     }
   }, [input]);
+
+  useEffect(() => {
+    setEditorDrafts((previousDrafts) => {
+      const nextDrafts: Record<string, string> = {};
+      for (const file of generatedFiles) {
+        if (Object.prototype.hasOwnProperty.call(previousDrafts, file.name)) {
+          nextDrafts[file.name] = previousDrafts[file.name];
+        }
+      }
+      return nextDrafts;
+    });
+
+    if (generatedFiles.length > 0 && !generatedFiles.some((file) => file.name === selectedFile)) {
+      setSelectedFile(generatedFiles[0].name);
+    }
+  }, [generatedFiles, selectedFile]);
+
+  useEffect(() => {
+    if (!generatedHtml && generatedFiles.length === 0) {
+      setPreviewBridgeState('idle');
+      return;
+    }
+
+    let isCancelled = false;
+
+    const mountLocalWorkspace = async () => {
+      const mounted = await mountWorkspace({
+        files: generatedFiles.map((file) => ({
+          path: file.name,
+          content: file.content,
+          language: file.type,
+        })),
+        entrypoint: 'index.html',
+        fallbackHtml: generatedHtml,
+      });
+
+      if (!isCancelled) {
+        setPreviewBridgeState(mounted ? 'pending' : 'failed');
+      }
+    };
+
+    const mountVerifiedPreviewSessionWorkspace = async () => {
+      if (!previewBootstrapSession) {
+        await mountLocalWorkspace();
+        return;
+      }
+
+      try {
+        const verifiedSession = await projectsApi.verifyPreviewSession(
+          previewBootstrapSession.project_id,
+          {
+            token: previewBootstrapSession.token,
+            generation_id: previewBootstrapSession.generation_id,
+            entrypoint: previewBootstrapSession.entrypoint,
+          },
+          session?.accessToken
+        );
+
+        const artifact = await projectsApi.previewArtifactFromEndpoint(
+          previewBootstrapSession.token,
+          verifiedSession.artifact_endpoint
+        );
+
+        if (isCancelled) {
+          return;
+        }
+
+        const mounted = await mountWorkspace({
+          files: artifact.files.map((file) => ({
+            path: file.path,
+            content: file.content,
+            language: file.language || inferFileTypeFromPath(file.path),
+          })),
+          entrypoint: verifiedSession.entrypoint,
+          fallbackHtml: artifact.preview_html || generatedHtml,
+        });
+
+        if (!isCancelled) {
+          setPreviewBridgeState(mounted ? 'pending' : 'failed');
+        }
+      } catch (error) {
+        console.warn('Preview session artifact bootstrap failed, using local workspace fallback.', error);
+        if (!isCancelled) {
+          await mountLocalWorkspace();
+        }
+      }
+    };
+
+    void mountVerifiedPreviewSessionWorkspace();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [generatedFiles, generatedHtml, mountWorkspace, previewBootstrapSession, session?.accessToken]);
+
+  useEffect(() => {
+    if (!previewRuntimeBridgeChannel || !previewRuntimeUrl) {
+      return;
+    }
+
+    const handlePreviewBridgeMessage = (event: MessageEvent) => {
+      if (event.source !== iframeRef.current?.contentWindow) {
+        return;
+      }
+
+      if (!event.data || typeof event.data !== 'object') {
+        return;
+      }
+
+      const payload = event.data as Record<string, unknown>;
+      if (payload[PREVIEW_BRIDGE_FLAG] !== true) {
+        return;
+      }
+
+      if (payload.channel !== previewRuntimeBridgeChannel) {
+        return;
+      }
+
+      const messageType = payload.type;
+      if (messageType === 'sovrn.preview.ready' || messageType === 'sovrn.preview.pong') {
+        setPreviewBridgeState('connected');
+        setPreviewBridgeLastEventAt(Date.now());
+        setIsRestartingPreviewRuntime(false);
+      }
+    };
+
+    window.addEventListener('message', handlePreviewBridgeMessage);
+
+    return () => {
+      window.removeEventListener('message', handlePreviewBridgeMessage);
+    };
+  }, [previewRuntimeBridgeChannel, previewRuntimeUrl]);
+
+  useEffect(() => {
+    if (
+      !previewBootstrapSession?.project_id ||
+      !previewBootstrapSession?.token ||
+      !showPreview
+    ) {
+      if (previewEventSourceRef.current) {
+        previewEventSourceRef.current.close();
+        previewEventSourceRef.current = null;
+      }
+      setPreviewStreamState('idle');
+      setPreviewStreamLastEventAt(null);
+      return;
+    }
+
+    const streamUrl = buildPreviewEventsStreamPath(previewBootstrapSession.project_id, {
+      generation_id: previewBootstrapSession.generation_id,
+      entrypoint: previewBootstrapSession.entrypoint,
+      preview_token: previewBootstrapSession.token,
+      poll_interval_ms: 1500,
+    });
+
+    const eventSource = new EventSource(streamUrl);
+    previewEventSourceRef.current = eventSource;
+    setPreviewStreamState('connecting');
+
+    const handleHeartbeat = () => {
+      setPreviewStreamState('live');
+      setPreviewStreamLastEventAt(Date.now());
+    };
+
+    const handlePreviewUpdated = (event: MessageEvent<string>) => {
+      try {
+        const payload = JSON.parse(event.data) as PreviewStreamUpdatePayload;
+        const incomingFiles = Array.isArray(payload.files) ? payload.files : [];
+        const nextGeneratedFiles: GeneratedFile[] = incomingFiles.map((file, index) => {
+          const path = typeof file.path === 'string' && file.path.trim() ? file.path : `file-${index}.txt`;
+          const content = typeof file.content === 'string' ? file.content : '';
+          const size =
+            typeof file.size_bytes === 'number' && Number.isFinite(file.size_bytes)
+              ? file.size_bytes
+              : new TextEncoder().encode(content).length;
+
+          return {
+            name: path,
+            content,
+            type:
+              typeof file.language === 'string' && file.language.trim()
+                ? file.language
+                : inferFileTypeFromPath(path),
+            size,
+          };
+        });
+
+        if (nextGeneratedFiles.length > 0) {
+          setGeneratedFiles(nextGeneratedFiles);
+          setEditorDrafts({});
+          setSelectedFile((previous) =>
+            nextGeneratedFiles.some((file) => file.name === previous)
+              ? previous
+              : nextGeneratedFiles[0].name
+          );
+        }
+
+        const nextHtml =
+          typeof payload.preview_html === 'string' && payload.preview_html.trim()
+            ? payload.preview_html
+            : '';
+        if (nextHtml) {
+          previewUpdateStartedAtRef.current = Date.now();
+          setGeneratedHtml(nextHtml);
+        }
+
+        void mountWorkspace({
+          files: nextGeneratedFiles.map((file) => ({
+            path: file.name,
+            content: file.content,
+            language: file.type,
+          })),
+          entrypoint:
+            typeof payload.entrypoint === 'string' && payload.entrypoint.trim()
+              ? payload.entrypoint
+              : 'index.html',
+          fallbackHtml: nextHtml || undefined,
+        });
+
+        setPreviewBridgeState('pending');
+        setPreviewStreamState('live');
+        setPreviewStreamLastEventAt(Date.now());
+        recordClientMetric('builder_preview_stream_update_count', 1, {
+          source: 'sse',
+        });
+      } catch (error) {
+        console.error('Failed to process preview stream update event:', error);
+        setPreviewStreamState('error');
+      }
+    };
+
+    const handleStreamError = () => {
+      setPreviewStreamState(
+        eventSource.readyState === EventSource.CLOSED ? 'disconnected' : 'error'
+      );
+    };
+
+    eventSource.addEventListener('heartbeat', handleHeartbeat as EventListener);
+    eventSource.addEventListener('preview.updated', handlePreviewUpdated as EventListener);
+    eventSource.onerror = handleStreamError;
+
+    return () => {
+      eventSource.removeEventListener('heartbeat', handleHeartbeat as EventListener);
+      eventSource.removeEventListener('preview.updated', handlePreviewUpdated as EventListener);
+      eventSource.close();
+      if (previewEventSourceRef.current === eventSource) {
+        previewEventSourceRef.current = null;
+      }
+    };
+  }, [
+    mountWorkspace,
+    previewBootstrapSession?.entrypoint,
+    previewBootstrapSession?.generation_id,
+    previewBootstrapSession?.project_id,
+    previewBootstrapSession?.token,
+    previewStreamReconnectNonce,
+    showPreview,
+  ]);
+
+  useEffect(() => {
+    if (!showPreview || previewStreamState !== 'live' || !previewStreamLastEventAt) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      const elapsed = Date.now() - previewStreamLastEventAt;
+      if (elapsed >= PREVIEW_STREAM_STALE_THRESHOLD_MS) {
+        setPreviewStreamState((current) => (current === 'live' ? 'stale' : current));
+      }
+    }, 1000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [previewStreamLastEventAt, previewStreamState, showPreview]);
 
   const filteredChats = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -261,10 +648,13 @@ export default function BuilderPage() {
 
   const getAIResponse = async (userMessage: string): Promise<BuilderChatApiResponse> => {
     const conversationHistory = buildConversationContext();
-    conversationHistory.push({ role: 'user', content: userMessage });
+    const isIncrementalConversationRequest =
+      FRONTEND_CONVERSATION_STATE_ENABLED && isUuid(conversationThreadId);
+    const requestMessages = isIncrementalConversationRequest
+      ? [{ role: 'user' as const, content: userMessage }]
+      : [...conversationHistory, { role: 'user' as const, content: userMessage }];
 
-    const systemPrompt = FRONTEND_RESOLVED_ACTION_ENABLED
-      ? `You are SOVRN, a friendly and intelligent AI assistant that helps users build websites.
+    const systemPrompt = `You are SOVRN, a friendly and intelligent AI assistant that helps users build websites.
 
 Return only valid JSON matching this schema:
 {
@@ -281,63 +671,100 @@ Return only valid JSON matching this schema:
 Rules:
 - Use action "ready_to_generate" only when you have enough detail to build the site now.
 - Keep assistant_message concise and user-friendly.
-- If action is "ready_to_generate", include generation_request.brief.`
-      : `You are SOVRN, a friendly and intelligent AI assistant that helps users build websites. You can also have normal conversations.
-
-Your capabilities:
-- Chat naturally about any topic
-- Help users plan and design websites
-- When a user wants to generate a website, help them clarify their requirements first
-
-Guidelines:
-- Be conversational, friendly, and helpful
-- Keep responses concise (1-3 sentences usually)
-- If someone wants to build a website, ask about: type, style, colors, sections needed
-- When you have enough info to generate, say "I'm ready to generate your website" and summarize what you'll create
-- Use the phrase "GENERATE_WEBSITE:" followed by a description only when ready to generate
-
-Example for website generation:
-User: "I want a coffee shop website"
-You: "Nice! What style - modern, cozy, minimal? Any specific sections like menu, about, contact?"
-User: "Modern with a menu and contact form"
-You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu display, and contact form"`;
+- If action is "ready_to_generate", include generation_request.brief.`;
     
+    const aiChatStartedAt = Date.now();
+    const correlationId = createCorrelationId('/api/v1/ai/chat');
+
     try {
+      const requestBody: Record<string, unknown> = {
+        messages: [
+          {
+            role: 'system',
+            content: systemPrompt
+          },
+          ...requestMessages
+        ],
+        temperature: 0.7,
+        max_tokens: 512,
+        json_mode: true,
+      };
+
+      if (FRONTEND_CONVERSATION_STATE_ENABLED) {
+        requestBody.idempotency_key = createClientIdempotencyKey();
+        if (isUuid(conversationThreadId)) {
+          requestBody.thread_id = conversationThreadId;
+        }
+
+        const sessionUserId = session?.user?.id;
+        if (isUuid(sessionUserId)) {
+          requestBody.user_id = sessionUserId;
+        }
+      }
+
       const response = await fetch('/api/v1/ai/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: [
-            {
-              role: 'system',
-              content: systemPrompt
-            },
-            ...conversationHistory
-          ],
-          temperature: 0.7,
-          max_tokens: 512,
-          json_mode: FRONTEND_RESOLVED_ACTION_ENABLED,
-        })
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Correlation-ID': correlationId,
+          'X-Client-Session-ID': getClientSessionId(),
+        },
+        body: JSON.stringify(requestBody)
       });
+
+      recordRequestMetric('/api/v1/ai/chat', 'POST', response.status, Date.now() - aiChatStartedAt);
 
       if (response.ok) {
         const data = await response.json() as {
           content?: unknown;
           resolved_action?: unknown;
+          resolved_action_reason?: unknown;
+          proposed_action?: unknown;
           generation_handoff_allowed?: unknown;
+          thread_id?: unknown;
+          turn_index?: unknown;
+          state_version?: unknown;
+          idempotency_key?: unknown;
         };
+
+        const threadId = isUuid(data.thread_id) ? data.thread_id : undefined;
+        const turnIndex = parseIntegerField(data.turn_index);
+        const stateVersion = parseIntegerField(data.state_version);
+        const idempotencyKey =
+          typeof data.idempotency_key === 'string' ? data.idempotency_key : undefined;
+        const hasConversationMeta =
+          threadId !== undefined ||
+          turnIndex !== undefined ||
+          stateVersion !== undefined ||
+          idempotencyKey !== undefined;
+
         return {
           content: typeof data.content === 'string'
             ? data.content
             : "I'm having trouble thinking right now. Could you try again?",
-          resolvedAction: typeof data.resolved_action === 'string' ? data.resolved_action : undefined,
+          resolvedAction: isResolvedAction(data.resolved_action) ? data.resolved_action : undefined,
+          resolvedActionReason:
+            typeof data.resolved_action_reason === 'string'
+              ? data.resolved_action_reason
+              : undefined,
+          proposedAction: isResolvedAction(data.proposed_action) ? data.proposed_action : undefined,
           generationHandoffAllowed:
             typeof data.generation_handoff_allowed === 'boolean'
               ? data.generation_handoff_allowed
               : undefined,
+          conversationMeta: hasConversationMeta
+            ? {
+                threadId,
+                turnIndex,
+                stateVersion,
+                idempotencyKey,
+              }
+            : undefined,
         };
       }
     } catch (error) {
+      recordRequestMetric('/api/v1/ai/chat', 'POST', 0, Date.now() - aiChatStartedAt);
+      recordUiError(error, 'boundary', { scope: 'builder_ai_chat' });
       console.error('AI chat error:', error);
     }
     
@@ -348,7 +775,16 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
 
   const generateWebsite = async (
     prompt: string
-  ): Promise<{ success: boolean; files: GeneratedFile[]; projectId?: string; jobId?: string; generationId?: string; error?: string }> => {
+  ): Promise<{
+    success: boolean;
+    files: GeneratedFile[];
+    projectId?: string;
+    jobId?: string;
+    generationId?: string;
+    previewSession?: PreviewSessionResponse;
+    error?: string;
+  }> => {
+    const generationStartedAt = Date.now();
     setTaskSteps([
       { id: 'create-project', label: 'Create project', status: 'running' },
       { id: 'queue-job', label: 'Queue generation job', status: 'pending' },
@@ -411,10 +847,26 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
 
       const files = (resolved.files || []) as GeneratedFile[];
 
+      let previewSession: PreviewSessionResponse | undefined;
+      try {
+        previewSession = await projectsApi.createPreviewSession(token, project.id, {
+          generation_id: resolved.generationId,
+          entrypoint: 'index.html',
+        });
+        setPreviewBootstrapSession(previewSession);
+      } catch (previewSessionError) {
+        console.warn('Preview session bootstrap skipped:', previewSessionError);
+        setPreviewBootstrapSession(null);
+      }
+
+      previewUpdateStartedAtRef.current = Date.now();
       setGeneratedHtml(resolved.previewHtml);
       setShowPreview(true);
       setGeneratedFiles(files);
       setTaskSteps((prev) => prev.map((step) => ({ ...step, status: 'completed' })));
+      recordClientMetric('builder_generation_duration_ms', Date.now() - generationStartedAt, {
+        success: true,
+      });
 
       return {
         success: true,
@@ -422,10 +874,15 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
         projectId,
         jobId,
         generationId: resolved.generationId,
+        previewSession,
       };
     } catch (error) {
       console.error('Canonical generation error:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown canonical generation error.';
+      recordClientMetric('builder_generation_duration_ms', Date.now() - generationStartedAt, {
+        success: false,
+      });
+      recordUiError(error, 'boundary', { scope: 'builder_generation' });
       return {
         success: false,
         files: [],
@@ -473,7 +930,22 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
     setInput('');
     setIsThinking(true);
 
+    const aiRoundTripStartedAt = Date.now();
     const aiResponse = await getAIResponse(messageText);
+    if (FRONTEND_CONVERSATION_STATE_ENABLED && aiResponse.conversationMeta) {
+      if (isUuid(aiResponse.conversationMeta.threadId)) {
+        setConversationThreadId(aiResponse.conversationMeta.threadId);
+      }
+      if (typeof aiResponse.conversationMeta.turnIndex === 'number') {
+        setConversationTurnIndex(aiResponse.conversationMeta.turnIndex);
+      }
+      if (typeof aiResponse.conversationMeta.stateVersion === 'number') {
+        setConversationStateVersion(aiResponse.conversationMeta.stateVersion);
+      }
+    }
+    recordClientMetric('builder_chat_roundtrip_ms', Date.now() - aiRoundTripStartedAt, {
+      endpoint: '/api/v1/ai/chat',
+    });
     
     setIsThinking(false);
 
@@ -481,51 +953,46 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
     let shouldGenerate = false;
     let displayResponse = content;
     let generatePrompt = '';
+    let parsedAction: BuilderResolvedAction | undefined;
 
-    if (FRONTEND_RESOLVED_ACTION_ENABLED) {
-      let structuredAssistantMessage: string | undefined;
-      let structuredGenerationBrief: string | undefined;
+    let structuredAssistantMessage: string | undefined;
+    let structuredGenerationBrief: string | undefined;
 
-      try {
-        const parsed = JSON.parse(content) as {
-          assistant_message?: unknown;
-          generation_request?: unknown;
-        };
+    try {
+      const parsed = JSON.parse(content) as {
+        action?: unknown;
+        assistant_message?: unknown;
+        generation_request?: unknown;
+      };
 
-        if (typeof parsed.assistant_message === 'string' && parsed.assistant_message.trim()) {
-          structuredAssistantMessage = parsed.assistant_message.trim();
-        }
-
-        const generationRequest = parsed.generation_request;
-        if (generationRequest && typeof generationRequest === 'object' && !Array.isArray(generationRequest)) {
-          const brief = (generationRequest as { brief?: unknown }).brief;
-          if (typeof brief === 'string' && brief.trim()) {
-            structuredGenerationBrief = brief.trim();
-          }
-        }
-      } catch {
-        // Keep raw content display when the model response is not valid JSON.
+      if (isResolvedAction(parsed.action)) {
+        parsedAction = parsed.action;
       }
 
-      displayResponse = structuredAssistantMessage || content;
-      shouldGenerate =
-        aiResponse.resolvedAction === 'ready_to_generate' &&
-        aiResponse.generationHandoffAllowed === true;
-      generatePrompt = shouldGenerate
-        ? (structuredGenerationBrief || messageText)
-        : '';
-    } else {
-      const sentinelGenerate = content.includes('GENERATE_WEBSITE:');
-      const sentinelParts = sentinelGenerate ? content.split('GENERATE_WEBSITE:') : [];
-      const sentinelDisplayResponse = sentinelGenerate ? sentinelParts[0].trim() : content;
-      const sentinelGeneratePrompt = sentinelGenerate ? (sentinelParts[1]?.trim() || messageText) : '';
+      if (typeof parsed.assistant_message === 'string' && parsed.assistant_message.trim()) {
+        structuredAssistantMessage = parsed.assistant_message.trim();
+      }
 
-      shouldGenerate = sentinelGenerate;
-      displayResponse = sentinelDisplayResponse;
-      generatePrompt = shouldGenerate
-        ? (sentinelGeneratePrompt || messageText)
-        : '';
+      const generationRequest = parsed.generation_request;
+      if (generationRequest && typeof generationRequest === 'object' && !Array.isArray(generationRequest)) {
+        const brief = (generationRequest as { brief?: unknown }).brief;
+        if (typeof brief === 'string' && brief.trim()) {
+          structuredGenerationBrief = brief.trim();
+        }
+      }
+    } catch {
+      // Keep raw content display when the model response is not valid JSON.
     }
+
+    const resolvedAction = aiResponse.resolvedAction || parsedAction;
+    const generationHandoffAllowed =
+      aiResponse.generationHandoffAllowed ?? (resolvedAction === 'ready_to_generate');
+
+    displayResponse = structuredAssistantMessage || content;
+    shouldGenerate = resolvedAction === 'ready_to_generate' && generationHandoffAllowed === true;
+    generatePrompt = shouldGenerate
+      ? (structuredGenerationBrief || messageText)
+      : '';
 
     // Show AI response if there's one before generation
     if (displayResponse) {
@@ -536,7 +1003,9 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
         content: '',
         timestamp: new Date(),
         isStreaming: true,
-        isNew: true
+        isNew: true,
+        resolvedAction: aiResponse.resolvedAction,
+        actionReason: aiResponse.resolvedActionReason,
       };
       
       setMessages(prev => [...prev.map(m => ({ ...m, isNew: false })), assistantMessage]);
@@ -563,7 +1032,7 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
       setIsGenerating(true);
       
       // Run generation (user can still chat during this)
-      const { success, files, projectId, jobId, generationId, error } = await generateWebsite(generatePrompt);
+      const { success, files, projectId, jobId, generationId, previewSession, error } = await generateWebsite(generatePrompt);
       const duration = parseFloat(((Date.now() - startTime) / 1000).toFixed(2));
       
       // Format files for display
@@ -576,6 +1045,7 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
         projectId ? `Project: ${projectId}` : null,
         jobId ? `Job: ${jobId}` : null,
         generationId ? `Generation: ${generationId}` : null,
+        previewSession ? `Preview session: active` : null,
       ].filter(Boolean).join(', ');
       
       // Update task message to show completion
@@ -598,6 +1068,127 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
     }
   };
 
+  const selectedGeneratedFile = generatedFiles.find((file) => file.name === selectedFile);
+  const selectedFileDraftContent = selectedGeneratedFile
+    ? (editorDrafts[selectedGeneratedFile.name] ?? selectedGeneratedFile.content)
+    : generatedHtml;
+  const draftCount = Object.keys(editorDrafts).length;
+
+  const updateEditorDraft = (fileName: string, nextContent: string) => {
+    setEditorDrafts((previous) => {
+      const sourceContent = generatedFiles.find((file) => file.name === fileName)?.content;
+      if (sourceContent === undefined || sourceContent === nextContent) {
+        if (!Object.prototype.hasOwnProperty.call(previous, fileName)) {
+          return previous;
+        }
+
+        const { [fileName]: _, ...rest } = previous;
+        return rest;
+      }
+
+      return {
+        ...previous,
+        [fileName]: nextContent,
+      };
+    });
+  };
+
+  const discardEditorDrafts = () => {
+    setEditorDrafts({});
+  };
+
+  const applyEditorPatchToPreview = async () => {
+    if (generatedFiles.length === 0 || isApplyingEditorPatch) {
+      return;
+    }
+
+    setIsApplyingEditorPatch(true);
+    try {
+      const patchedFiles: GeneratedFile[] = generatedFiles.map((file) => {
+        const patchedContent = editorDrafts[file.name] ?? file.content;
+        return {
+          ...file,
+          content: patchedContent,
+          size: new TextEncoder().encode(patchedContent).length,
+        };
+      });
+
+      setGeneratedFiles(patchedFiles);
+
+      const indexHtml =
+        patchedFiles.find((file) => file.name === 'index.html')?.content ||
+        patchedFiles.find((file) => file.name.endsWith('/index.html'))?.content ||
+        generatedHtml;
+
+      if (indexHtml) {
+        previewUpdateStartedAtRef.current = Date.now();
+        setGeneratedHtml(indexHtml);
+      }
+
+      const mounted = await mountWorkspace({
+        files: patchedFiles.map((file) => ({
+          path: file.name,
+          content: file.content,
+          language: file.type,
+        })),
+        entrypoint: 'index.html',
+        fallbackHtml: indexHtml,
+      });
+
+      setPreviewBridgeState(mounted ? 'pending' : 'failed');
+      setEditorBridgeLastAppliedAt(Date.now());
+      setEditorDrafts({});
+      recordClientMetric('builder_editor_patch_apply_count', 1, {
+        file_count: patchedFiles.length,
+      });
+    } catch (error) {
+      console.error('Failed to apply editor patch to preview runtime:', error);
+      setPreviewBridgeState('failed');
+      recordUiError(error, 'boundary', { scope: 'builder_editor_patch_apply' });
+    } finally {
+      setIsApplyingEditorPatch(false);
+    }
+  };
+
+  const requestPreviewRuntimeRestart = () => {
+    if (!previewRuntimeBridgeChannel || !iframeRef.current?.contentWindow) {
+      return;
+    }
+
+    setIsRestartingPreviewRuntime(true);
+    setPreviewBridgeState('pending');
+    iframeRef.current.contentWindow.postMessage(
+      {
+        [PREVIEW_BRIDGE_FLAG]: true,
+        type: 'sovrn.preview.reload',
+        channel: previewRuntimeBridgeChannel,
+        timestamp: Date.now(),
+      },
+      '*'
+    );
+    recordClientMetric('builder_preview_runtime_restart_count', 1, {
+      runtime_kind: previewRuntimeKind,
+    });
+  };
+
+  const reconnectPreviewStream = () => {
+    if (!previewBootstrapSession?.project_id || !previewBootstrapSession?.token) {
+      return;
+    }
+
+    if (previewEventSourceRef.current) {
+      previewEventSourceRef.current.close();
+      previewEventSourceRef.current = null;
+    }
+
+    setPreviewStreamState('connecting');
+    setPreviewStreamLastEventAt(null);
+    setPreviewStreamReconnectNonce((previous) => previous + 1);
+    recordClientMetric('builder_preview_stream_reconnect_count', 1, {
+      previous_state: previewStreamState,
+    });
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -610,7 +1201,11 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
   };
 
   const copyCode = async () => {
-    await navigator.clipboard.writeText(generatedHtml);
+    if (viewMode === 'code' && selectedGeneratedFile) {
+      await navigator.clipboard.writeText(selectedFileDraftContent);
+    } else {
+      await navigator.clipboard.writeText(generatedHtml);
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -627,7 +1222,8 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
           'javascript': 'application/javascript',
           'json': 'application/json'
         };
-        const blob = new Blob([file.content], { type: mimeTypes[file.type] || 'text/plain' });
+        const resolvedContent = editorDrafts[file.name] ?? file.content;
+        const blob = new Blob([resolvedContent], { type: mimeTypes[file.type] || 'text/plain' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -649,17 +1245,49 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
   };
 
   const openFullscreen = () => {
+    if (previewRuntimeUrl) {
+      window.open(previewRuntimeUrl, '_blank');
+      return;
+    }
+
     const blob = new Blob([generatedHtml], { type: 'text/html' });
     window.open(URL.createObjectURL(blob), '_blank');
   };
 
   const startNewChat = () => {
+    if (previewEventSourceRef.current) {
+      previewEventSourceRef.current.close();
+      previewEventSourceRef.current = null;
+    }
+
     setGeneratedHtml('');
     setGeneratedFiles([]);
     setSelectedFile('index.html');
     setMessages([]);
     setSelectedChatId(null);
+    setConversationThreadId(null);
+    setConversationTurnIndex(null);
+    setConversationStateVersion(null);
+    setPreviewBootstrapSession(null);
+    setPreviewBridgeState('idle');
+    setPreviewBridgeLastEventAt(null);
+    setPreviewStreamState('idle');
+    setPreviewStreamLastEventAt(null);
+    setPreviewStreamReconnectNonce(0);
+    setEditorDrafts({});
+    setEditorBridgeLastAppliedAt(null);
+    setIsRestartingPreviewRuntime(false);
+    clearMountedWorkspace();
   };
+
+  const streamFallbackMessage =
+    previewStreamState === 'stale'
+      ? 'Live preview stream is stale. New updates may be delayed.'
+      : previewStreamState === 'disconnected'
+        ? 'Live preview stream disconnected. Reconnect to resume incremental updates.'
+        : previewStreamState === 'error'
+          ? 'Live preview stream encountered an error. Reconnect to recover updates.'
+          : null;
 
   const isNewChat = messages.length === 0;
 
@@ -859,9 +1487,23 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
               {sidebarOpen ? <PanelLeftClose className="w-5 h-5" /> : <PanelLeftOpen className="w-5 h-5" />}
             </button>
             {!isNewChat && (
-              <span className={`text-sm font-medium ${isDark ? 'text-white/60' : 'text-black/60'}`}>
-                New conversation
-              </span>
+              <div className="flex flex-col leading-tight">
+                <span className={`text-sm font-medium ${isDark ? 'text-white/60' : 'text-black/60'}`}>
+                  New conversation
+                </span>
+                {FRONTEND_CONVERSATION_STATE_ENABLED && conversationThreadId && (
+                  <span className={`text-[11px] ${isDark ? 'text-white/35' : 'text-black/35'}`}>
+                    Compacted context synced
+                    {typeof conversationTurnIndex === 'number' ? ` · turn ${conversationTurnIndex}` : ''}
+                    {typeof conversationStateVersion === 'number' ? ` · v${conversationStateVersion}` : ''}
+                  </span>
+                )}
+                {previewBootstrapSession && (
+                  <span className={`text-[11px] ${isDark ? 'text-white/35' : 'text-black/35'}`}>
+                    Preview token ready
+                  </span>
+                )}
+              </div>
             )}
           </div>
 
@@ -996,6 +1638,24 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
                           <div className={`${
                             isDark ? 'text-white/90' : 'text-black/90'
                           }`}>
+                            {!message.isTask && FRONTEND_RESOLVED_ACTION_ENABLED && message.resolvedAction && (
+                              <div className="mb-2 flex flex-wrap items-center gap-2">
+                                <span
+                                  className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] uppercase tracking-wide ${
+                                    isDark
+                                      ? 'bg-white/[0.08] text-white/70 border border-white/[0.12]'
+                                      : 'bg-black/[0.06] text-black/70 border border-black/[0.12]'
+                                  }`}
+                                >
+                                  {message.resolvedAction.replace(/_/g, ' ')}
+                                </span>
+                                {message.actionReason && (
+                                  <span className={`text-[11px] ${isDark ? 'text-white/45' : 'text-black/45'}`}>
+                                    {message.actionReason.replace(/_/g, ' ')}
+                                  </span>
+                                )}
+                              </div>
+                            )}
                             {/* Task indicator - running */}
                             {message.isTask && message.taskStatus === 'running' && (
                               <div className="space-y-3">
@@ -1206,32 +1866,53 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
               <div className={`flex-shrink-0 px-4 py-3 flex items-center justify-between border-b ${
                 isDark ? 'border-white/[0.06]' : 'border-black/[0.06]'
               }`}>
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => setViewMode('preview')}
-                    className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all flex items-center gap-1.5 ${
-                      viewMode === 'preview'
-                        ? isDark ? 'bg-white/10 text-white' : 'bg-black/10 text-black'
-                        : isDark ? 'text-white/40 hover:text-white/60' : 'text-black/40 hover:text-black/60'
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setViewMode('preview')}
+                      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all flex items-center gap-1.5 ${
+                        viewMode === 'preview'
+                          ? isDark ? 'bg-white/10 text-white' : 'bg-black/10 text-black'
+                          : isDark ? 'text-white/40 hover:text-white/60' : 'text-black/40 hover:text-black/60'
+                      }`}
+                    >
+                      <Eye className="w-4 h-4" />
+                      Preview
+                    </button>
+                    <button
+                      onClick={() => setViewMode('code')}
+                      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all flex items-center gap-1.5 ${
+                        viewMode === 'code'
+                          ? isDark ? 'bg-white/10 text-white' : 'bg-black/10 text-black'
+                          : isDark ? 'text-white/40 hover:text-white/60' : 'text-black/40 hover:text-black/60'
+                      }`}
+                    >
+                      <Code2 className="w-4 h-4" />
+                      Code
+                    </button>
+                  </div>
+
+                  <div
+                    title={`${previewRuntimeDetail}${previewBridgeLastEventAt ? ` | bridge last seen: ${new Date(previewBridgeLastEventAt).toISOString()}` : ''}${previewStreamLastEventAt ? ` | stream last seen: ${new Date(previewStreamLastEventAt).toISOString()}` : ''}`}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] uppercase tracking-wide border ${
+                      isDark
+                        ? 'border-white/[0.12] text-white/55 bg-white/[0.03]'
+                        : 'border-black/[0.12] text-black/55 bg-black/[0.03]'
                     }`}
                   >
-                    <Eye className="w-4 h-4" />
-                    Preview
-                  </button>
-                  <button
-                    onClick={() => setViewMode('code')}
-                    className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all flex items-center gap-1.5 ${
-                      viewMode === 'code'
-                        ? isDark ? 'bg-white/10 text-white' : 'bg-black/10 text-black'
-                        : isDark ? 'text-white/40 hover:text-white/60' : 'text-black/40 hover:text-black/60'
-                    }`}
-                  >
-                    <Code2 className="w-4 h-4" />
-                    Code
-                  </button>
+                    {previewRuntimeKind} {previewRuntimeStatus} bridge:{previewBridgeState} stream:{previewStreamState} {previewRuntimeMountedFileCount > 0 ? `(${previewRuntimeMountedFileCount} files)` : ''}
+                  </div>
                 </div>
 
                 <div className="flex items-center gap-1">
+                  <button
+                    onClick={requestPreviewRuntimeRestart}
+                    disabled={!previewRuntimeBridgeChannel}
+                    className={`p-2 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed ${isDark ? 'text-white/40 hover:text-white hover:bg-white/[0.06]' : 'text-black/40 hover:text-black hover:bg-black/[0.04]'}`}
+                    title={previewRuntimeBridgeChannel ? 'Restart runtime' : 'Runtime bridge unavailable'}
+                  >
+                    <RotateCw className={`w-4 h-4 ${isRestartingPreviewRuntime ? 'animate-spin' : ''}`} />
+                  </button>
                   <button onClick={openFullscreen} className={`p-2 rounded-lg transition-all ${isDark ? 'text-white/40 hover:text-white hover:bg-white/[0.06]' : 'text-black/40 hover:text-black hover:bg-black/[0.04]'}`} title="Fullscreen">
                     <Maximize2 className="w-4 h-4" />
                   </button>
@@ -1247,42 +1928,168 @@ You: "GENERATE_WEBSITE: Modern coffee shop website with hero section, menu displ
                 </div>
               </div>
 
+              {streamFallbackMessage && (
+                <div
+                  className={`px-4 py-2 flex items-center justify-between border-b ${
+                    isDark
+                      ? 'border-amber-400/30 bg-amber-500/10 text-amber-100'
+                      : 'border-amber-600/20 bg-amber-100 text-amber-900'
+                  }`}
+                >
+                  <p className="text-xs leading-5">{streamFallbackMessage}</p>
+                  <button
+                    onClick={reconnectPreviewStream}
+                    className={`ml-4 px-2.5 py-1 rounded-md text-xs font-medium transition-all ${
+                      isDark
+                        ? 'bg-amber-300/20 hover:bg-amber-300/30 text-amber-100'
+                        : 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-900'
+                    }`}
+                  >
+                    Reconnect stream
+                  </button>
+                </div>
+              )}
+
               {/* Content */}
               <div className="flex-1 relative overflow-hidden">
                 {viewMode === 'preview' ? (
                   <iframe
                     ref={iframeRef}
-                    srcDoc={generatedHtml}
+                    src={previewRuntimeUrl || undefined}
+                    srcDoc={previewRuntimeUrl ? undefined : generatedHtml}
+                    onLoad={() => {
+                      if (previewRuntimeBridgeChannel && iframeRef.current?.contentWindow) {
+                        iframeRef.current.contentWindow.postMessage(
+                          {
+                            [PREVIEW_BRIDGE_FLAG]: true,
+                            type: 'sovrn.preview.ping',
+                            channel: previewRuntimeBridgeChannel,
+                            timestamp: Date.now(),
+                          },
+                          '*'
+                        );
+                      }
+
+                      if (previewUpdateStartedAtRef.current === null) {
+                        return;
+                      }
+                      recordClientMetric(
+                        'builder_preview_render_ms',
+                        Date.now() - previewUpdateStartedAtRef.current,
+                        { view_mode: viewMode }
+                      );
+                      previewUpdateStartedAtRef.current = null;
+                    }}
                     className="w-full h-full bg-white"
                     sandbox="allow-scripts"
                     title="Preview"
                   />
                 ) : (
-                  <div className={`h-full flex flex-col ${isDark ? 'bg-[#0a0a0a]' : 'bg-[#fafafa]'}`}>
-                    {/* File tabs */}
-                    {generatedFiles.length > 0 && (
-                      <div className={`flex items-center gap-1 px-4 py-2 border-b ${
-                        isDark ? 'border-white/[0.06]' : 'border-black/[0.06]'
-                      }`}>
-                        {generatedFiles.map((file) => (
+                  <div className={`h-full flex ${isDark ? 'bg-[#0a0a0a]' : 'bg-[#fafafa]'}`}>
+                    <aside
+                      className={`w-56 border-r ${
+                        isDark ? 'border-white/[0.06] bg-[#0d0d0d]' : 'border-black/[0.06] bg-white'
+                      }`}
+                    >
+                      <div
+                        className={`px-3 py-2 text-[11px] uppercase tracking-wide border-b ${
+                          isDark ? 'text-white/45 border-white/[0.06]' : 'text-black/45 border-black/[0.06]'
+                        }`}
+                      >
+                        Workspace {draftCount > 0 ? `(${draftCount} draft${draftCount === 1 ? '' : 's'})` : ''}
+                      </div>
+                      <div className="h-full overflow-auto p-2 space-y-1">
+                        {generatedFiles.map((file) => {
+                          const hasDraft = Object.prototype.hasOwnProperty.call(editorDrafts, file.name);
+                          return (
+                            <button
+                              key={file.name}
+                              onClick={() => setSelectedFile(file.name)}
+                              className={`w-full text-left px-2 py-1.5 rounded-md text-xs font-mono transition-all ${
+                                selectedFile === file.name
+                                  ? isDark
+                                    ? 'bg-white/12 text-white'
+                                    : 'bg-black/10 text-black'
+                                  : isDark
+                                    ? 'text-white/60 hover:text-white hover:bg-white/[0.06]'
+                                    : 'text-black/60 hover:text-black hover:bg-black/[0.05]'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="truncate">{file.name}</span>
+                                {hasDraft && (
+                                  <span className={`${isDark ? 'text-emerald-300/80' : 'text-emerald-700'} text-[10px]`}>●</span>
+                                )}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </aside>
+
+                    <div className="flex-1 flex flex-col min-w-0">
+                      <div
+                        className={`flex items-center justify-between gap-2 px-3 py-2 border-b ${
+                          isDark ? 'border-white/[0.06]' : 'border-black/[0.06]'
+                        }`}
+                      >
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className={`text-xs font-mono truncate ${isDark ? 'text-white/70' : 'text-black/70'}`}>
+                            {selectedGeneratedFile?.name || 'index.html'}
+                          </span>
+                          {editorBridgeLastAppliedAt && (
+                            <span className={`text-[10px] ${isDark ? 'text-white/40' : 'text-black/45'}`}>
+                              last applied {new Date(editorBridgeLastAppliedAt).toLocaleTimeString()}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-1.5">
                           <button
-                            key={file.name}
-                            onClick={() => setSelectedFile(file.name)}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-mono transition-all ${
-                              selectedFile === file.name
-                                ? isDark ? 'bg-white/10 text-white' : 'bg-black/10 text-black'
-                                : isDark ? 'text-white/40 hover:text-white/60 hover:bg-white/[0.04]' : 'text-black/40 hover:text-black/60 hover:bg-black/[0.04]'
+                            onClick={discardEditorDrafts}
+                            disabled={draftCount === 0 || isApplyingEditorPatch}
+                            className={`px-2.5 py-1 rounded-md text-xs transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                              isDark
+                                ? 'text-white/70 hover:bg-white/[0.08]'
+                                : 'text-black/70 hover:bg-black/[0.06]'
                             }`}
                           >
-                            {file.name}
+                            Discard
                           </button>
-                        ))}
+                          <button
+                            onClick={() => {
+                              void applyEditorPatchToPreview();
+                            }}
+                            disabled={draftCount === 0 || isApplyingEditorPatch}
+                            className={`px-2.5 py-1 rounded-md text-xs transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                              isDark
+                                ? 'bg-white/12 text-white hover:bg-white/20'
+                                : 'bg-black text-white hover:opacity-90'
+                            }`}
+                          >
+                            {isApplyingEditorPatch ? 'Applying...' : 'Apply Patch'}
+                          </button>
+                        </div>
                       </div>
-                    )}
-                    <div className="flex-1 overflow-auto p-6">
-                      <pre className={`text-xs font-mono whitespace-pre-wrap leading-relaxed ${isDark ? 'text-white/70' : 'text-black/70'}`}>
-                        {generatedFiles.find(f => f.name === selectedFile)?.content || generatedHtml}
-                      </pre>
+
+                      <div className="flex-1 p-3">
+                        <textarea
+                          value={selectedFileDraftContent}
+                          onChange={(event) => {
+                            if (!selectedGeneratedFile) {
+                              return;
+                            }
+                            updateEditorDraft(selectedGeneratedFile.name, event.target.value);
+                          }}
+                          disabled={!selectedGeneratedFile}
+                          spellCheck={false}
+                          className={`w-full h-full resize-none rounded-lg border px-3 py-2 text-xs font-mono leading-relaxed focus:outline-none ${
+                            isDark
+                              ? 'bg-[#070707] border-white/[0.12] text-white/80 focus:border-white/30'
+                              : 'bg-white border-black/[0.12] text-black/80 focus:border-black/30'
+                          } disabled:opacity-50`}
+                        />
+                      </div>
                     </div>
                   </div>
                 )}

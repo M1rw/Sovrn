@@ -172,6 +172,119 @@ Response:
 }
 ```
 
+### Get Preview Artifact
+
+Returns normalized generation files and resolved preview HTML for browser runtime mounting.
+
+```http
+GET /projects/{id}/preview-artifact?generation_id={generation_id}&entrypoint=index.html
+Authorization: Bearer {token}
+```
+
+Authentication modes:
+- Access token (`type=access`) for regular authenticated project access.
+- Preview session token (`type=preview_session`) for runtime bootstrap artifact fetches constrained by token claims.
+
+Query Parameters:
+- `generation_id` (uuid, optional): Use a specific generation. Defaults to latest generation for the project.
+- `entrypoint` (string, optional): Preferred HTML entrypoint path (default: `index.html`).
+
+Response:
+```json
+{
+  "project_id": "project-uuid",
+  "generation_id": "generation-uuid",
+  "generation_version": 4,
+  "entrypoint": "index.html",
+  "preview_html": "<!doctype html>...",
+  "files": [
+    {
+      "path": "index.html",
+      "content": "<!doctype html>...",
+      "language": "html",
+      "size_bytes": 1024
+    }
+  ],
+  "source": "site_generation"
+}
+```
+
+### Create Preview Session
+
+Issues a short-lived signed token for preview runtime bootstrap.
+
+```http
+POST /projects/{id}/preview-session
+Authorization: Bearer {token}
+Content-Type: application/json
+
+{
+  "generation_id": "generation-uuid",
+  "entrypoint": "index.html",
+  "ttl_seconds": 600
+}
+```
+
+Response:
+```json
+{
+  "token": "eyJ...",
+  "token_type": "preview_session",
+  "expires_at": "2026-04-17T12:00:00Z",
+  "project_id": "project-uuid",
+  "generation_id": "generation-uuid",
+  "entrypoint": "index.html",
+  "artifact_endpoint": "/api/v1/projects/project-uuid/preview-artifact?generation_id=generation-uuid&entrypoint=index.html"
+}
+```
+
+### Verify Preview Session
+
+Verifies preview session token claims for bootstrap handshake before mounting preview artifacts.
+
+```http
+POST /projects/{id}/preview-session/verify
+Content-Type: application/json
+
+{
+  "token": "eyJ...",
+  "generation_id": "generation-uuid",
+  "entrypoint": "index.html"
+}
+```
+
+Response:
+```json
+{
+  "valid": true,
+  "token_type": "preview_session",
+  "project_id": "project-uuid",
+  "generation_id": "generation-uuid",
+  "entrypoint": "index.html",
+  "expires_at": "2026-04-17T12:00:00Z",
+  "artifact_endpoint": "/api/v1/projects/project-uuid/preview-artifact?generation_id=generation-uuid&entrypoint=index.html"
+}
+```
+
+### Preview Event Stream
+
+Streams incremental preview update events for builder runtime apply.
+
+```http
+GET /projects/{id}/preview-events?generation_id={generation_id}&entrypoint=index.html&preview_token={preview_session_token}
+Accept: text/event-stream
+```
+
+Query Parameters:
+- `generation_id` (uuid, optional): Stream updates for a specific generation; defaults to latest visible generation.
+- `entrypoint` (string, optional): HTML entrypoint path (default: `index.html`).
+- `preview_token` (string, optional): Preview session token for runtime bootstrap authorization.
+- `poll_interval_ms` (int, optional): Poll cadence for update checks (default: 1500ms, min 250, max 15000).
+
+Event Types:
+- `preview.updated`: Emitted when generation id/version changes; contains normalized files + preview HTML.
+- `heartbeat`: Liveness ping with generation metadata and timestamp.
+
 ---
 
 ## Jobs

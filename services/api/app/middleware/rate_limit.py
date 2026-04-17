@@ -54,7 +54,14 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         
         # Skip health checks
-        if request.url.path in ["/health", "/", "/api/docs", "/api/openapi.json"]:
+        if request.url.path in [
+            "/health",
+            "/ready",
+            "/",
+            "/metrics/http",
+            "/api/docs",
+            "/api/openapi.json",
+        ]:
             return await call_next(request)
         
         client_key = self._get_client_key(request)

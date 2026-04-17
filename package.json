@@ -34,6 +34,9 @@
     "model:verify": "node scripts/verify-model.js",
     "eval:run": "cd eval && python run_benchmarks.py",
     "eval:report": "cd eval && python generate_report.py",
+    "load:chat": "k6 run eval/load/k6_chat.js",
+    "load:chat:docker": "powershell -ExecutionPolicy Bypass -File eval/load/run-k6-docker.ps1 -Scenario chat",
+    "load:generation": "k6 run eval/load/k6_generation_flow.js",
     "backup": "docker compose exec db pg_dump -U sovrn sovrn | gzip > backups/$(date +%Y%m%d_%H%M%S).sql.gz",
     "clean": "rm -rf node_modules .next dist build __pycache__ .pytest_cache",
     "prepare": "husky install"

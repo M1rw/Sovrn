@@ -1,3 +1,5 @@
-password: P8o86tayzqyYQ8Fk
-
-connect: postgresql://postgres:[YOUR-PASSWORD]@db.nqqlaxkfchftxtgruply.supabase.co:5432/postgres
+Password: 'ynoYjy0rkFJl516o'
+Project: 'https://frfexqvcsqzgfntezwez.supabase.co'
+Public: 'sb_publishable_SBO2-8QZTxFjNtVBS0MkYw_7PYuvhYf'
+--
+DirectConnection: 'postgresql://postgres:[YOUR-PASSWORD]@db.frfexqvcsqzgfntezwez.supabase.co:5432/postgres'
