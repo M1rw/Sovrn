@@ -52,6 +52,18 @@ _shadow_metrics = {
     "action_mismatch": 0,
 }
 
+REVISION_INTENT_KEYWORDS = (
+    "revise",
+    "revision",
+    "change",
+    "update",
+    "edit",
+    "fix",
+    "error",
+    "failed",
+    "failure",
+)
+
 
 # =============================================================================
 # Request/Response Models
@@ -349,7 +361,7 @@ def _resolve_shadow_action(request: ChatRequest, proposal: StructuredModelOutput
         return "ask_clarification", "generation_gate_failed"
 
     if proposed_action == "propose_revision":
-        has_revision_intent = any(keyword in lowered_user for keyword in ("revise", "revision", "change", "update", "edit"))
+        has_revision_intent = any(keyword in lowered_user for keyword in REVISION_INTENT_KEYWORDS)
         revision_payload = proposal.revision_request if isinstance(proposal.revision_request, dict) else {}
         has_revision_scope = bool(revision_payload.get("change_summary") or revision_payload.get("targets"))
         if has_revision_intent and has_revision_scope:
