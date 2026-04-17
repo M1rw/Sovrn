@@ -122,6 +122,16 @@ class Settings(BaseSettings):
     # AI Phase 5 Response Contract Rollout
     # ==========================================================================
     AI_RESOLVED_ACTION_RESPONSE_ENABLED: bool = False
+
+    # ==========================================================================
+    # Phase 2 Preview Runtime Bootstrap
+    # ==========================================================================
+    PREVIEW_SESSION_TOKEN_TTL_SECONDS: int = Field(default=600, ge=60, le=3600)
+    PREVIEW_SESSION_TOKEN_MAX_TTL_SECONDS: int = Field(default=3600, ge=60, le=86400)
+    PREVIEW_BUILD_TIMEOUT_SECONDS: int = Field(default=20, ge=1, le=300)
+    PREVIEW_BUILD_MAX_FILES: int = Field(default=12, ge=1, le=200)
+    PREVIEW_BUILD_MAX_TOTAL_BYTES: int = Field(default=786432, ge=1024, le=10485760)
+    PREVIEW_BUILD_MAX_FILE_BYTES: int = Field(default=262144, ge=1024, le=5242880)
     
     # ==========================================================================
     # Sparks (Monetization)

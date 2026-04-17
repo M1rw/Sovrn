@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useState } from 'react';
 import { useSession } from 'next-auth/react';
@@ -20,7 +20,7 @@ interface SettingsFormProps {
   user: {
     id: string;
     email: string;
-    name?: string;
+    name?: string | null;
   };
 }
 
@@ -121,3 +121,4 @@ export function SettingsForm({ user }: SettingsFormProps) {
     </form>
   );
 }
+

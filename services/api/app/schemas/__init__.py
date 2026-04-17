@@ -278,6 +278,67 @@ class SiteGenerationResponse(BaseSchema):
     created_at: datetime
 
 
+class PreviewArtifactFile(BaseModel):
+    """A normalized file payload used for browser preview runtime mounting."""
+
+    path: str
+    content: str
+    language: Optional[str] = None
+    size_bytes: int = Field(default=0, ge=0)
+
+
+class PreviewArtifactResponse(BaseModel):
+    """Project artifact payload for preview runtime bootstrap."""
+
+    project_id: UUID
+    generation_id: UUID
+    generation_version: int = Field(ge=1)
+    entrypoint: str = "index.html"
+    preview_html: str
+    files: list[PreviewArtifactFile]
+    source: str = "site_generation"
+
+
+class PreviewSessionRequest(BaseModel):
+    """Request payload for issuing a signed preview session token."""
+
+    generation_id: Optional[UUID] = None
+    entrypoint: str = Field(default="index.html", min_length=1, max_length=260)
+    ttl_seconds: Optional[int] = Field(default=None, ge=60, le=86400)
+
+
+class PreviewSessionResponse(BaseModel):
+    """Signed token response for preview runtime bootstrap."""
+
+    token: str
+    token_type: str = "preview_session"
+    expires_at: datetime
+    project_id: UUID
+    generation_id: UUID
+    entrypoint: str
+    artifact_endpoint: str
+
+
+class PreviewSessionVerifyRequest(BaseModel):
+    """Request payload for preview-session token verification."""
+
+    token: str = Field(..., min_length=16)
+    generation_id: Optional[UUID] = None
+    entrypoint: Optional[str] = Field(default=None, min_length=1, max_length=260)
+
+
+class PreviewSessionVerifyResponse(BaseModel):
+    """Result payload for preview-session token verification."""
+
+    valid: bool = True
+    token_type: str = "preview_session"
+    project_id: UUID
+    generation_id: UUID
+    entrypoint: str
+    expires_at: datetime
+    artifact_endpoint: str
+
+
 # =============================================================================
 # Generation Request Schemas
 # =============================================================================

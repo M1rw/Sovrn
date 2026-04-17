@@ -5,15 +5,23 @@
 Project management and site generation endpoints.
 """
 
-from typing import Optional
+import asyncio
+import json
+from datetime import datetime, timedelta, timezone
+from typing import Any, Optional
+from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import StreamingResponse
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.config import settings
 from app.core.database import get_db
+from app.core.security import create_preview_session_token, decode_token_payload
 from app.models import User, Project, ProjectStatus, Job, JobType, JobStatus, SiteGeneration
 from app.schemas import (
     ProjectCreate,
@@ -23,14 +31,229 @@ from app.schemas import (
     GenerateSiteRequest,
     JobResponse,
     SiteGenerationResponse,
+    PreviewArtifactFile,
+    PreviewArtifactResponse,
+    PreviewSessionRequest,
+    PreviewSessionResponse,
+    PreviewSessionVerifyRequest,
+    PreviewSessionVerifyResponse,
     PaginatedResponse,
     MessageResponse,
 )
-from app.api.v1.deps import get_current_user, require_sparks
+from app.api.v1.deps import bearer_scheme, get_current_user, get_current_user_optional, require_sparks
 from app.services.generation import GenerationService
 
 
 router = APIRouter()
+
+
+def _build_preview_artifact_endpoint(
+    project_id: UUID,
+    generation_id: UUID,
+    entrypoint: str,
+) -> str:
+    entrypoint_query_value = quote(entrypoint, safe="/")
+    return (
+        f"/api/v1/projects/{project_id}/preview-artifact"
+        f"?generation_id={generation_id}&entrypoint={entrypoint_query_value}"
+    )
+
+
+def _serialize_sse_event(event_name: str, payload: dict[str, Any]) -> str:
+    return f"event: {event_name}\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
+
+
+async def _get_project_for_user(
+    project_id: UUID,
+    user_id: UUID,
+    db: AsyncSession,
+) -> Project:
+    result = await db.execute(
+        select(Project).where(Project.id == project_id, Project.user_id == user_id)
+    )
+    project = result.scalar_one_or_none()
+
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found",
+        )
+
+    return project
+
+
+async def _get_project(project_id: UUID, db: AsyncSession) -> Project:
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found",
+        )
+
+    return project
+
+
+async def _get_preview_generation(
+    project_id: UUID,
+    db: AsyncSession,
+    generation_id: Optional[UUID] = None,
+) -> SiteGeneration:
+    query = select(SiteGeneration).where(SiteGeneration.project_id == project_id)
+
+    if generation_id:
+        result = await db.execute(query.where(SiteGeneration.id == generation_id))
+        generation = result.scalar_one_or_none()
+        if not generation:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Generation not found for project",
+            )
+        return generation
+
+    ordered_result = await db.execute(
+        query.order_by(SiteGeneration.version.desc(), SiteGeneration.created_at.desc())
+    )
+    latest_generation = ordered_result.scalars().first()
+    if not latest_generation:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No generation artifacts available for project",
+        )
+
+    return latest_generation
+
+
+def _normalize_preview_artifact_files(raw_files: object) -> list[PreviewArtifactFile]:
+    if not isinstance(raw_files, list):
+        return []
+
+    normalized: list[PreviewArtifactFile] = []
+    for file_entry in raw_files:
+        if not isinstance(file_entry, dict):
+            continue
+
+        path = file_entry.get("path")
+        if not isinstance(path, str) or not path.strip():
+            continue
+
+        raw_content = file_entry.get("content")
+        content = raw_content if isinstance(raw_content, str) else ""
+
+        raw_language = file_entry.get("language")
+        language = raw_language if isinstance(raw_language, str) else None
+
+        normalized.append(
+            PreviewArtifactFile(
+                path=path,
+                content=content,
+                language=language,
+                size_bytes=len(content.encode("utf-8")),
+            )
+        )
+
+    return normalized
+
+
+def _select_preview_html(
+    files: list[PreviewArtifactFile],
+    entrypoint: str,
+    code_output: object,
+) -> str:
+    preferred = next(
+        (file.content for file in files if file.path == entrypoint and file.content.strip()),
+        None,
+    )
+    if preferred:
+        return preferred
+
+    root_index = next(
+        (file.content for file in files if file.path == "index.html" and file.content.strip()),
+        None,
+    )
+    if root_index:
+        return root_index
+
+    nested_index = next(
+        (file.content for file in files if file.path.endswith("/index.html") and file.content.strip()),
+        None,
+    )
+    if nested_index:
+        return nested_index
+
+    if isinstance(code_output, dict):
+        fallback_preview = code_output.get("preview_html")
+        if isinstance(fallback_preview, str) and fallback_preview.strip():
+            return fallback_preview
+
+    return ""
+
+
+def _decode_preview_session_claims(token: str) -> Optional[dict[str, Any]]:
+    payload = decode_token_payload(token, token_type="preview_session")
+    if not payload:
+        return None
+
+    required_fields = ("project_id", "generation_id", "entrypoint", "exp")
+    for field_name in required_fields:
+        if field_name not in payload:
+            return None
+
+    if not isinstance(payload.get("project_id"), str):
+        return None
+    if not isinstance(payload.get("generation_id"), str):
+        return None
+    if not isinstance(payload.get("entrypoint"), str):
+        return None
+
+    return payload
+
+
+def _resolve_preview_session_access(
+    payload: dict[str, Any],
+    project_id: UUID,
+    generation_id: Optional[UUID],
+    entrypoint: str,
+) -> tuple[UUID, str, datetime]:
+    try:
+        claimed_project_id = UUID(str(payload["project_id"]))
+        claimed_generation_id = UUID(str(payload["generation_id"]))
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid preview session token claims",
+        )
+
+    if claimed_project_id != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Preview session token is not valid for project",
+        )
+
+    if generation_id and generation_id != claimed_generation_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Preview session token is not valid for generation",
+        )
+
+    claimed_entrypoint = str(payload["entrypoint"]).strip() or "index.html"
+    requested_entrypoint = entrypoint.strip() or claimed_entrypoint
+    if requested_entrypoint != claimed_entrypoint:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Preview session token is not valid for entrypoint",
+        )
+
+    raw_exp = payload.get("exp")
+    if not isinstance(raw_exp, (int, float)):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid preview session token expiry",
+        )
+
+    expires_at = datetime.fromtimestamp(raw_exp, tz=timezone.utc)
+    return (generation_id or claimed_generation_id, requested_entrypoint, expires_at)
 
 
 @router.get("", response_model=PaginatedResponse)
@@ -259,6 +482,278 @@ async def list_generations(
     generations = result.scalars().all()
     
     return generations
+
+
+@router.get("/{project_id}/preview-artifact", response_model=PreviewArtifactResponse)
+async def get_preview_artifact(
+    project_id: UUID,
+    generation_id: Optional[UUID] = Query(default=None),
+    entrypoint: str = Query(default="index.html", min_length=1, max_length=260),
+    user: Optional[User] = Depends(get_current_user_optional),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get normalized generation files for browser preview runtime mounting."""
+    resolved_generation_id = generation_id
+    resolved_entrypoint = entrypoint.strip() or "index.html"
+
+    if user is not None:
+        project = await _get_project_for_user(project_id=project_id, user_id=user.id, db=db)
+    else:
+        if not credentials:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        payload = _decode_preview_session_claims(credentials.credentials)
+        if not payload:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid preview session token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        resolved_generation_id, resolved_entrypoint, _ = _resolve_preview_session_access(
+            payload=payload,
+            project_id=project_id,
+            generation_id=generation_id,
+            entrypoint=resolved_entrypoint,
+        )
+        project = await _get_project(project_id=project_id, db=db)
+
+    generation = await _get_preview_generation(
+        project_id=project.id,
+        db=db,
+        generation_id=resolved_generation_id,
+    )
+
+    normalized_files = _normalize_preview_artifact_files(generation.files)
+    preview_html = _select_preview_html(
+        files=normalized_files,
+        entrypoint=resolved_entrypoint,
+        code_output=generation.code_output,
+    )
+
+    if not preview_html:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No preview HTML available for generation artifacts",
+        )
+
+    return PreviewArtifactResponse(
+        project_id=project.id,
+        generation_id=generation.id,
+        generation_version=max(generation.version, 1),
+        entrypoint=resolved_entrypoint,
+        preview_html=preview_html,
+        files=normalized_files,
+        source="site_generation",
+    )
+
+
+@router.post("/{project_id}/preview-session", response_model=PreviewSessionResponse)
+async def create_preview_session(
+    project_id: UUID,
+    request: PreviewSessionRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Issue a signed token for preview runtime bootstrap and artifact retrieval."""
+    project = await _get_project_for_user(project_id=project_id, user_id=user.id, db=db)
+    generation = await _get_preview_generation(
+        project_id=project.id,
+        db=db,
+        generation_id=request.generation_id,
+    )
+
+    requested_ttl = request.ttl_seconds or settings.PREVIEW_SESSION_TOKEN_TTL_SECONDS
+    ttl_seconds = max(60, min(requested_ttl, settings.PREVIEW_SESSION_TOKEN_MAX_TTL_SECONDS))
+    resolved_entrypoint = request.entrypoint.strip() or "index.html"
+
+    token, expires_at = create_preview_session_token(
+        subject=str(user.id),
+        project_id=str(project.id),
+        generation_id=str(generation.id),
+        entrypoint=resolved_entrypoint,
+        expires_delta=timedelta(seconds=ttl_seconds),
+        additional_claims={"scope": "preview_runtime_bootstrap"},
+    )
+
+    artifact_endpoint = _build_preview_artifact_endpoint(
+        project_id=project.id,
+        generation_id=generation.id,
+        entrypoint=resolved_entrypoint,
+    )
+
+    return PreviewSessionResponse(
+        token=token,
+        expires_at=expires_at,
+        project_id=project.id,
+        generation_id=generation.id,
+        entrypoint=resolved_entrypoint,
+        artifact_endpoint=artifact_endpoint,
+    )
+
+
+@router.post("/{project_id}/preview-session/verify", response_model=PreviewSessionVerifyResponse)
+async def verify_preview_session(
+    project_id: UUID,
+    request: PreviewSessionVerifyRequest,
+    user: Optional[User] = Depends(get_current_user_optional),
+    db: AsyncSession = Depends(get_db),
+):
+    """Verify preview-session token claims for secure runtime bootstrap handshakes."""
+    if user is not None:
+        await _get_project_for_user(project_id=project_id, user_id=user.id, db=db)
+    else:
+        await _get_project(project_id=project_id, db=db)
+
+    payload = _decode_preview_session_claims(request.token)
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid preview session token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    requested_entrypoint = request.entrypoint or ""
+    resolved_generation_id, resolved_entrypoint, expires_at = _resolve_preview_session_access(
+        payload=payload,
+        project_id=project_id,
+        generation_id=request.generation_id,
+        entrypoint=requested_entrypoint,
+    )
+
+    artifact_endpoint = _build_preview_artifact_endpoint(
+        project_id=project_id,
+        generation_id=resolved_generation_id,
+        entrypoint=resolved_entrypoint,
+    )
+
+    return PreviewSessionVerifyResponse(
+        valid=True,
+        project_id=project_id,
+        generation_id=resolved_generation_id,
+        entrypoint=resolved_entrypoint,
+        expires_at=expires_at,
+        artifact_endpoint=artifact_endpoint,
+    )
+
+
+@router.get("/{project_id}/preview-events")
+async def stream_preview_events(
+    project_id: UUID,
+    request: Request,
+    generation_id: Optional[UUID] = Query(default=None),
+    entrypoint: str = Query(default="index.html", min_length=1, max_length=260),
+    preview_token: Optional[str] = Query(default=None, min_length=16),
+    poll_interval_ms: int = Query(default=1500, ge=250, le=15000),
+    user: Optional[User] = Depends(get_current_user_optional),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    db: AsyncSession = Depends(get_db),
+):
+    """Server-Sent Event stream for preview artifact updates."""
+    resolved_generation_id = generation_id
+    resolved_entrypoint = entrypoint.strip() or "index.html"
+
+    if user is not None:
+        project = await _get_project_for_user(project_id=project_id, user_id=user.id, db=db)
+    else:
+        token_value = preview_token or (credentials.credentials if credentials else None)
+        if not token_value:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        payload = _decode_preview_session_claims(token_value)
+        if not payload:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid preview session token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        resolved_generation_id, resolved_entrypoint, _ = _resolve_preview_session_access(
+            payload=payload,
+            project_id=project_id,
+            generation_id=generation_id,
+            entrypoint=resolved_entrypoint,
+        )
+        project = await _get_project(project_id=project_id, db=db)
+
+    poll_interval_seconds = poll_interval_ms / 1000
+
+    async def _event_stream():
+        yield "retry: 2000\n\n"
+        last_emitted_generation_id: Optional[UUID] = None
+        last_emitted_generation_version: int = -1
+
+        while True:
+            if await request.is_disconnected():
+                break
+
+            generation = await _get_preview_generation(
+                project_id=project.id,
+                db=db,
+                generation_id=resolved_generation_id,
+            )
+            normalized_files = _normalize_preview_artifact_files(generation.files)
+            preview_html = _select_preview_html(
+                files=normalized_files,
+                entrypoint=resolved_entrypoint,
+                code_output=generation.code_output,
+            )
+
+            should_emit_update = (
+                generation.id != last_emitted_generation_id
+                or generation.version != last_emitted_generation_version
+            )
+
+            if should_emit_update:
+                yield _serialize_sse_event(
+                    "preview.updated",
+                    {
+                        "project_id": str(project.id),
+                        "generation_id": str(generation.id),
+                        "generation_version": max(generation.version, 1),
+                        "entrypoint": resolved_entrypoint,
+                        "preview_html": preview_html,
+                        "files": [file.model_dump() for file in normalized_files],
+                        "artifact_endpoint": _build_preview_artifact_endpoint(
+                            project_id=project.id,
+                            generation_id=generation.id,
+                            entrypoint=resolved_entrypoint,
+                        ),
+                    },
+                )
+                last_emitted_generation_id = generation.id
+                last_emitted_generation_version = generation.version
+
+            yield _serialize_sse_event(
+                "heartbeat",
+                {
+                    "project_id": str(project.id),
+                    "generation_id": str(generation.id),
+                    "generation_version": max(generation.version, 1),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+
+            await asyncio.sleep(poll_interval_seconds)
+
+    return StreamingResponse(
+        _event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/{project_id}/export")

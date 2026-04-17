@@ -120,6 +120,54 @@ export const projectsApi = {
       body: JSON.stringify(data),
       token,
     }),
+
+  previewArtifact: (
+    token: string,
+    id: string,
+    params?: { generation_id?: string; entrypoint?: string }
+  ) => {
+    const query = new URLSearchParams();
+    if (params?.generation_id) {
+      query.set('generation_id', params.generation_id);
+    }
+    if (params?.entrypoint) {
+      query.set('entrypoint', params.entrypoint);
+    }
+
+    const queryString = query.toString();
+    const endpoint = queryString
+      ? `/api/v1/projects/${id}/preview-artifact?${queryString}`
+      : `/api/v1/projects/${id}/preview-artifact`;
+
+    return fetchApi<PreviewArtifactResponse>(endpoint, { token });
+  },
+
+  previewArtifactFromEndpoint: (
+    token: string,
+    artifactEndpoint: string
+  ) => fetchApi<PreviewArtifactResponse>(artifactEndpoint, { token }),
+
+  createPreviewSession: (
+    token: string,
+    id: string,
+    data: PreviewSessionRequestData = {}
+  ) =>
+    fetchApi<PreviewSessionResponse>(`/api/v1/projects/${id}/preview-session`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+      token,
+    }),
+
+  verifyPreviewSession: (
+    id: string,
+    data: PreviewSessionVerifyRequestData,
+    token?: string
+  ) =>
+    fetchApi<PreviewSessionVerifyResponse>(`/api/v1/projects/${id}/preview-session/verify`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+      token,
+    }),
 };
 
 // Jobs
@@ -254,6 +302,55 @@ export interface SiteGeneration {
   created_at: string;
 }
 
+export interface PreviewArtifactFile {
+  path: string;
+  content: string;
+  language?: string;
+  size_bytes: number;
+}
+
+export interface PreviewArtifactResponse {
+  project_id: string;
+  generation_id: string;
+  generation_version: number;
+  entrypoint: string;
+  preview_html: string;
+  files: PreviewArtifactFile[];
+  source: string;
+}
+
+export interface PreviewSessionRequestData {
+  generation_id?: string;
+  entrypoint?: string;
+  ttl_seconds?: number;
+}
+
+export interface PreviewSessionResponse {
+  token: string;
+  token_type: 'preview_session';
+  expires_at: string;
+  project_id: string;
+  generation_id: string;
+  entrypoint: string;
+  artifact_endpoint: string;
+}
+
+export interface PreviewSessionVerifyRequestData {
+  token: string;
+  generation_id?: string;
+  entrypoint?: string;
+}
+
+export interface PreviewSessionVerifyResponse {
+  valid: true;
+  token_type: 'preview_session';
+  project_id: string;
+  generation_id: string;
+  entrypoint: string;
+  expires_at: string;
+  artifact_endpoint: string;
+}
+
 export interface Job {
   id: string;
   project_id: string;
@@ -349,6 +446,34 @@ export interface CanonicalJobResolution {
   generationTimeMs?: number;
   source?: 'generation-record' | 'job-output';
   error?: string;
+}
+
+export interface PreviewStreamQuery {
+  generation_id?: string;
+  entrypoint?: string;
+  preview_token?: string;
+  poll_interval_ms?: number;
+}
+
+export function buildPreviewEventsStreamPath(projectId: string, query: PreviewStreamQuery): string {
+  const params = new URLSearchParams();
+  if (query.generation_id) {
+    params.set('generation_id', query.generation_id);
+  }
+  if (query.entrypoint) {
+    params.set('entrypoint', query.entrypoint);
+  }
+  if (query.preview_token) {
+    params.set('preview_token', query.preview_token);
+  }
+  if (typeof query.poll_interval_ms === 'number' && Number.isFinite(query.poll_interval_ms)) {
+    params.set('poll_interval_ms', String(Math.trunc(query.poll_interval_ms)));
+  }
+
+  const suffix = params.toString();
+  return suffix
+    ? `/api/v1/projects/${projectId}/preview-events?${suffix}`
+    : `/api/v1/projects/${projectId}/preview-events`;
 }
 
 function normalizeFile(name: string, content: string): CanonicalGeneratedFile {

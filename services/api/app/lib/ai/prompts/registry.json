@@ -11,7 +11,7 @@
       "file": "modules/core_identity.v1.md",
       "order": 10,
       "required": true,
-      "checksum_sha256": "ef6ff11d9bdd46473cb61625d2a62538fff4bac819bb8cfcd6399594261f4c06"
+      "checksum_sha256": "72277b07184309728fd997ade6d941211209c775fe2600cdee44a9dd2b018652"
     },
     {
       "id": "website_clarification",
@@ -19,7 +19,7 @@
       "file": "modules/website_clarification.v1.md",
       "order": 20,
       "required": false,
-      "checksum_sha256": "0b61c9d160fe2dfe693bc3cf480de40e84acf84b74c3e40acc2ed4c5d7ff0b6d"
+      "checksum_sha256": "65da130491f3dbb35fcd39df451dea715b4ad321db3f3e3424290d60e02e3c79"
     },
     {
       "id": "generation_readiness",
@@ -27,7 +27,7 @@
       "file": "modules/generation_readiness.v1.md",
       "order": 30,
       "required": false,
-      "checksum_sha256": "a730610fc3b8148942cf8731917bae40cd195e22083947b225e7e34809c672ed"
+      "checksum_sha256": "23391ad409c54a8f0bae402c2d21ea06acf5b75e2b1fdaf17bf3f3fe9f66774a"
     },
     {
       "id": "revision_rules",
@@ -35,7 +35,7 @@
       "file": "modules/revision_rules.v1.md",
       "order": 40,
       "required": false,
-      "checksum_sha256": "4802fd39521fb176ca848eebfdc53dde0282ecec1c9a88b283061c6d1761d358"
+      "checksum_sha256": "adb0b9aaaf389fecc29d00a46a072ea0c36c75d8df69b73c94fa6ca9eab48ec0"
     },
     {
       "id": "output_contract",
@@ -43,7 +43,8 @@
       "file": "modules/output_contract.v1.md",
       "order": 90,
       "required": true,
-      "checksum_sha256": "914542cf4d698a8c7cac30b2cba6b0d1135a6f857c37e0808c6af600334dfbe9"
+      "checksum_sha256": "79e3723549740c2ed02ff388b2286491d5866c41a68ec48367fa3460732ed2de"
     }
   ]
 }
+
