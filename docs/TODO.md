@@ -14,8 +14,15 @@ Only actionable pending engineering work is listed below.
 
 ## Phase 2 Next Work (WebContainer Runtime)
 
-1. Run staging preview latency benchmark (preferred: `eval/load/run-preview-latency.ps1`; fallback: `eval/load/preview_latency_benchmark.py`) and verify p95 total <= 1.5s in `eval/load/phase2_preview_latency_report.json`.
-2. Capture benchmark evidence in `docs/Plan/PHASE2_PREVIEW_LATENCY_VALIDATION_2026-04-17.md` after the staging run completes.
+1. Sync current `vscode-vfs://github/Miljte/Sovrn` edits into local clone before runtime execution (`C:\Miljte\Sovrn` currently does not include latest workspace changes).
+2. Run staging preview latency benchmark (preferred: `eval/load/run-preview-latency.ps1`; fallback: `eval/load/preview_latency_benchmark.py`) and verify p95 total <= 1.5s in `eval/load/phase2_preview_latency_report.json`.
+3. Capture benchmark evidence in `docs/Plan/PHASE2_PREVIEW_LATENCY_VALIDATION_2026-04-17.md` after the staging run completes.
+4. Confirm canary monitoring checks in staging after rollout ring activation (preview latency and stream reconnect metrics).
+
+Completed in current implementation slice:
+
+1. Added frontend preview lifecycle integration helper coverage and validated suites (`src/app/builder/preview-lifecycle.test.ts`, `src/lib/api.preview-stream.test.ts`, `src/hooks/use-preview-runtime.test.ts`) with `npx jest` (3 suites, 12 tests passed).
+2. Added backend endpoint-level Phase 2 contract tests and validated expanded backend suite with `py -3.11 -m pytest tests/test_phase2_preview_bootstrap.py tests/test_generation_service_preview_budget.py` (18 passed).
 
 ## Documentation Follow-Up (No Behavioral Change)
 

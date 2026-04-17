@@ -66,6 +66,14 @@ SOVRN_PROJECT_ID=<project_id> \
 python eval/load/preview_latency_benchmark.py
 ```
 
+Prerequisite check (PowerShell):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File eval/load/check-preview-latency-prereqs.ps1
+```
+
+This prints presence of required `SOVRN_*` environment variables and probes `/health` reachability before running the benchmark.
+
 PowerShell example:
 
 ```powershell

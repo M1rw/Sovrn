@@ -241,6 +241,12 @@ Goal: Deliver interactive browser-native runtime with fast visual feedback.
 - [x] Synced local-clone backend preview bootstrap contracts and validated runtime suite: tests/test_phase2_preview_bootstrap.py (11 passed)
 - [x] Added one-command PowerShell staging benchmark runner for Phase 2 gate execution: eval/load/run-preview-latency.ps1
 - [x] Synced latency runner into local clone and smoke-tested required-input validation path (fails fast without staging env vars)
+- [x] Added backend endpoint-level Phase 2 contract tests for preview-artifact access, preview-session TTL clamp, and preview-session verify userless flow in services/api/tests/test_phase2_preview_bootstrap.py
+- [x] Added frontend preview lifecycle integration helper coverage for bootstrap artifact mapping, preview.updated apply mapping, stale threshold detection, and reconnect/error transition behavior in apps/web/src/app/builder/preview-lifecycle.test.ts
+- [x] Runtime verification for expanded Phase 2 backend suite: py -3.11 -m pytest tests/test_phase2_preview_bootstrap.py tests/test_generation_service_preview_budget.py (18 passed)
+- [x] Runtime verification for expanded Phase 2 frontend preview suites: npx jest src/app/builder/preview-lifecycle.test.ts src/lib/api.preview-stream.test.ts src/hooks/use-preview-runtime.test.ts (3 suites, 12 tests passed)
+- [x] Validated local mock latency harness with real benchmark implementation and runner script (no placeholder benchmark substitution); report: eval/load/phase2_preview_latency_report.local_mock.json (5/5 successful, p95 total 31.78 ms, non-gating sanity evidence)
+- [x] Validated Phase 2 rollback drill path with runtime fallback flag disabled (`NEXT_PUBLIC_BUILDER_WEBCONTAINER_ENABLED=false`) and reran preview lifecycle/endpoint suites: frontend (3 suites, 12 tests passed), backend (tests/test_phase2_preview_bootstrap.py: 15 passed)
 
 ### Frontend
 
@@ -264,7 +270,35 @@ Goal: Deliver interactive browser-native runtime with fast visual feedback.
 
 - [x] Frontend integration test: boot + install + run preview
 - [x] Security test: iframe isolation and message validation
+- [x] Backend endpoint-level contract tests: preview-artifact, preview-session, preview-session/verify
 - [ ] p95 edit-to-preview latency <= 1.5s in staging
+
+### Phase 2 Release Controls (In Progress)
+
+- [x] Feature flag rollout plan documented for preview runtime enablement and fallback behavior
+- [x] Rollback playbook validated for preview endpoints and builder runtime fallback
+- [ ] Canary monitoring checks confirmed in staging for preview latency and preview stream disconnect/reconnect rates
+
+#### Rollout Plan
+
+1. Ring 1 (5%): enable `NEXT_PUBLIC_BUILDER_WEBCONTAINER_ENABLED=true` for canary users only; keep iframe fallback path enabled.
+2. Ring 2 (25%): expand only if no sustained regression in `builder_preview_render_ms` p95 and no spike in `builder_preview_stream_reconnect_count`.
+3. Ring 3 (50%): maintain rollout only if `builder_preview_stream_update_count` remains stable and error rates stay within Phase 2 error budget.
+4. Ring 4 (100%): complete rollout after at least one full business day of stable canary metrics.
+
+#### Rollback Playbook
+
+1. Immediate rollback switch: set `NEXT_PUBLIC_BUILDER_WEBCONTAINER_ENABLED=false` and redeploy web.
+2. Runtime fallback confirmation: verify builder preview mounts via iframe fallback and `preview-events` reconnect path remains available.
+3. API containment: if preview endpoint instability is detected, disable preview session issuance at deployment ring edge and route users to local mounted preview artifacts.
+4. Validation checklist before unfreeze: rerun frontend preview lifecycle tests and backend preview bootstrap contract suite.
+
+#### Canary Monitoring Checks
+
+1. Preview render latency metric: `builder_preview_render_ms` p95 within Phase 2 gate target.
+2. Stream health metrics: monitor `builder_preview_stream_update_count` and `builder_preview_stream_reconnect_count` for regressions.
+3. Runtime restart pressure: monitor `builder_preview_runtime_restart_count` for unexpected growth after rollout increments.
+4. Gate to advance rings: no sustained disconnect/error fallback banner rates in builder preview panel.
 
 ### Local URLs for Try/Test (Until Domain Purchase)
 
@@ -493,6 +527,8 @@ Goal: Release safely with measurable risk control.
 ## Immediate Next Execution Slice (Do This First)
 
 - [ ] Run `eval/load/run-preview-latency.ps1` (or `eval/load/preview_latency_benchmark.py`) in staging and validate `summary.p95_total_ms <= 1500` in `eval/load/phase2_preview_latency_report.json`
+- [ ] Provide staging `SOVRN_BASE_URL`, `SOVRN_TOKEN`, and `SOVRN_PROJECT_ID` in shell environment (or CI secret context) before executing the staging benchmark gate
+- [ ] Confirm canary monitoring checks in staging after rollout ring activation (`builder_preview_render_ms`, `builder_preview_stream_update_count`, `builder_preview_stream_reconnect_count`, `builder_preview_runtime_restart_count`)
 
 ## Notes
 
