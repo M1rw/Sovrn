@@ -1,3 +1,5 @@
+import { createCorrelationId, getClientSessionId, recordRequestMetric } from '@/lib/telemetry';
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 
 interface FetchOptions extends RequestInit {
@@ -20,20 +22,33 @@ async function fetchApi<T>(
   options: FetchOptions = {}
 ): Promise<T> {
   const { token, ...fetchOptions } = options;
+  const method = (fetchOptions.method || 'GET').toUpperCase();
+  const startedAt = Date.now();
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(options.headers as Record<string, string> || {}),
   };
 
+  headers['X-Correlation-ID'] = createCorrelationId(endpoint);
+  headers['X-Client-Session-ID'] = getClientSessionId();
+
   if (token) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    ...fetchOptions,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${endpoint}`, {
+      ...fetchOptions,
+      headers,
+    });
+  } catch (error) {
+    recordRequestMetric(endpoint, method, 0, Date.now() - startedAt);
+    throw error;
+  }
+
+  recordRequestMetric(endpoint, method, response.status, Date.now() - startedAt);
 
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));

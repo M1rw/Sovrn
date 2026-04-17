@@ -107,10 +107,41 @@ class InferenceEngine:
     
     def __init__(self):
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=settings.QUEUE_SIZE)
+        self.started_at = time.time()
         self.active_requests = 0
+        self.waiting_requests = 0
+        self.max_observed_concurrency = 0
         self.total_requests = 0
         self.total_tokens_generated = 0
+        self.total_wait_time_ms = 0.0
+        self.wait_events = 0
         self._response_cache: Dict[str, Tuple[float, Dict]] = {}
+
+    async def _wait_for_capacity(self, request_id: str, endpoint: str) -> float:
+        """Wait for a free inference slot and return wait time in ms."""
+        if self.active_requests < settings.MAX_CONCURRENT_REQUESTS:
+            return 0.0
+
+        wait_started_at = time.perf_counter()
+        self.waiting_requests += 1
+        try:
+            while self.active_requests >= settings.MAX_CONCURRENT_REQUESTS:
+                await asyncio.sleep(0.05)
+        finally:
+            self.waiting_requests = max(0, self.waiting_requests - 1)
+
+        wait_ms = (time.perf_counter() - wait_started_at) * 1000
+        self.total_wait_time_ms += wait_ms
+        self.wait_events += 1
+        logger.info(
+            "inference_wait_for_capacity",
+            request_id=request_id,
+            endpoint=endpoint,
+            wait_ms=round(wait_ms, 2),
+            active_requests=self.active_requests,
+            waiting_requests=self.waiting_requests,
+        )
+        return wait_ms
         
     async def chat_completion(
         self,
@@ -154,13 +185,19 @@ class InferenceEngine:
             if cached:
                 logger.info("response_cache_hit", request_id=request_id, model=model_name)
                 return cached[1]
-        
-        # Wait for slot if at capacity
-        while self.active_requests >= settings.MAX_CONCURRENT_REQUESTS:
-            await asyncio.sleep(0.1)
+
+        wait_ms = await self._wait_for_capacity(request_id, "chat_completion")
         
         self.active_requests += 1
+        self.max_observed_concurrency = max(self.max_observed_concurrency, self.active_requests)
         start_time = time.time()
+
+        if wait_ms > 0:
+            logger.info(
+                "chat_completion_resumed_after_wait",
+                request_id=request_id,
+                wait_ms=round(wait_ms, 2),
+            )
         
         try:
             if request.stream:
@@ -201,12 +238,19 @@ class InferenceEngine:
         model_name = self._select_model_name(getattr(request, 'model', None))
         target_model_path = self._resolve_model_path(model_name)
         model = await model_manager.load_model(model_path=target_model_path)
-        
-        while self.active_requests >= settings.MAX_CONCURRENT_REQUESTS:
-            await asyncio.sleep(0.1)
+
+        wait_ms = await self._wait_for_capacity(request_id, "text_completion")
         
         self.active_requests += 1
+        self.max_observed_concurrency = max(self.max_observed_concurrency, self.active_requests)
         start_time = time.time()
+
+        if wait_ms > 0:
+            logger.info(
+                "text_completion_resumed_after_wait",
+                request_id=request_id,
+                wait_ms=round(wait_ms, 2),
+            )
         
         cache_key = self._cache_key(model_name, request.prompt, request)
 
@@ -426,11 +470,27 @@ class InferenceEngine:
     
     def get_stats(self) -> Dict:
         """Get inference statistics."""
+        uptime_seconds = max(0, int(time.time() - self.started_at))
+        queue_capacity = max(1, settings.QUEUE_SIZE)
+        virtual_queue_depth = self.waiting_requests
+        queue_utilization = min(1.0, virtual_queue_depth / queue_capacity)
+        avg_wait_ms = self.total_wait_time_ms / self.wait_events if self.wait_events else 0.0
+
         return {
+            "uptime_seconds": uptime_seconds,
             "active_requests": self.active_requests,
+            "waiting_requests": self.waiting_requests,
+            "max_observed_concurrency": self.max_observed_concurrency,
             "total_requests": self.total_requests,
             "total_tokens_generated": self.total_tokens_generated,
+            "wait_events": self.wait_events,
+            "total_wait_time_ms": round(self.total_wait_time_ms, 2),
+            "avg_wait_time_ms": round(avg_wait_ms, 2),
             "queue_size": self.queue.qsize(),
+            "queue_capacity": queue_capacity,
+            "virtual_queue_depth": virtual_queue_depth,
+            "queue_utilization": round(queue_utilization, 4),
+            "cache_items": len(self._response_cache),
             "model_loaded": model_manager.is_loaded(),
             "model_info": model_manager.get_model_info()
         }

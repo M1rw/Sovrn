@@ -6,9 +6,11 @@ Processes generation jobs by calling agents.
 """
 
 import json
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from secrets import token_hex
 from uuid import UUID
 
 import httpx
@@ -29,10 +31,47 @@ class JobProcessor:
         self.session_factory = session_factory
         self.inference_url = inference_url
         self.api_url = api_url
+        self._stats = {
+            "processed": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "total_duration_ms": 0.0,
+            "last_duration_ms": 0.0,
+            "last_error": None,
+        }
+
+    @staticmethod
+    def _build_trace_headers(job_id: UUID) -> dict[str, str]:
+        correlation_id = f"worker-job:{job_id}"
+        trace_id = token_hex(16)
+        span_id = token_hex(8)
+        traceparent = f"00-{trace_id}-{span_id}-01"
+        return {
+            "X-Correlation-ID": correlation_id,
+            "X-Client-Session-ID": "worker-service",
+            "traceparent": traceparent,
+        }
+
+    def get_stats(self) -> dict[str, Any]:
+        processed = self._stats["processed"]
+        avg_duration_ms = (
+            round(self._stats["total_duration_ms"] / processed, 2)
+            if processed
+            else 0.0
+        )
+        return {
+            "processed": processed,
+            "succeeded": self._stats["succeeded"],
+            "failed": self._stats["failed"],
+            "last_duration_ms": round(self._stats["last_duration_ms"], 2),
+            "avg_duration_ms": avg_duration_ms,
+            "last_error": self._stats["last_error"],
+        }
     
     async def process(self, job: dict) -> None:
         """Process a single job."""
         job_id = job["id"]
+        started_at = time.perf_counter()
         logger.info("Processing job", job_id=str(job_id), type=job["type"])
         
         try:
@@ -40,7 +79,8 @@ class JobProcessor:
             async with httpx.AsyncClient(timeout=settings.JOB_TIMEOUT) as client:
                 response = await client.post(
                     f"{self.api_url}/api/v1/internal/process-job",
-                    json={"job_id": str(job_id)}
+                    json={"job_id": str(job_id)},
+                    headers=self._build_trace_headers(job_id) if settings.WORKER_TRACE_PROPAGATION_ENABLED else None,
                 )
                 
                 if response.status_code != 200:
@@ -55,11 +95,23 @@ class JobProcessor:
             
             # Mark job as completed
             await self._complete_job(job_id, output)
+            duration_ms = (time.perf_counter() - started_at) * 1000
+            self._stats["processed"] += 1
+            self._stats["succeeded"] += 1
+            self._stats["total_duration_ms"] += duration_ms
+            self._stats["last_duration_ms"] = duration_ms
+            self._stats["last_error"] = None
             logger.info("Job completed", job_id=str(job_id))
             
         except Exception as e:
             logger.error("Job failed", job_id=str(job_id), error=str(e))
             await self._fail_job(job_id, str(e))
+            duration_ms = (time.perf_counter() - started_at) * 1000
+            self._stats["processed"] += 1
+            self._stats["failed"] += 1
+            self._stats["total_duration_ms"] += duration_ms
+            self._stats["last_duration_ms"] = duration_ms
+            self._stats["last_error"] = str(e)
     
     async def _complete_job(self, job_id: UUID, output: dict) -> None:
         """Mark job as completed."""

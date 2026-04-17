@@ -32,6 +32,13 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "json"  # json or console
+
+    # ==========================================================================
+    # Observability
+    # ==========================================================================
+    OBSERVABILITY_TRACE_PROPAGATION_ENABLED: bool = True
+    OBSERVABILITY_HTTP_METRICS_ENABLED: bool = True
+    OBSERVABILITY_HTTP_METRICS_SAMPLE_LIMIT: int = Field(default=1000, ge=100, le=50000)
     
     # ==========================================================================
     # Server

@@ -30,10 +30,10 @@ def _coerce_style(value: Any) -> WebsiteStyle:
 
 
 def _truncate_utf8_bytes(content: str, max_bytes: int) -> str:
-        encoded = content.encode("utf-8")
-        if len(encoded) <= max_bytes:
-                return content
-        return encoded[:max_bytes].decode("utf-8", errors="ignore")
+    encoded = content.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return content
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
 
 
 def _build_starter_template(style: str) -> dict[str, Any]:

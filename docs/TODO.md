@@ -1,28 +1,21 @@
 # SOVRN Engineering TODO
 
-Last updated: 2026-04-13
+Last updated: 2026-04-17
 
 Only actionable pending engineering work is listed below.
 
-## Phase 3 Residual Hardening
+## Phase 1 Closure Status (Completed 2026-04-17)
 
-1. Add canonical endpoint integration test for idempotent replay on thread_id + idempotency_key.
-2. Add integration test for snapshot version conflict path and fail-open logging behavior.
-3. Add integration test for thread resume path when thread_id exists vs missing.
+1. Conversation persistence hardening tests completed (idempotent replay, thread resume, snapshot conflict fail-open).
+2. Context compaction integration and summary contract rejection coverage completed.
+3. Resolved-action contract promotion and endpoint-level outcome coverage completed.
+4. Residual string-trigger transition logic removed from canonical builder flow.
+5. Canary ring simulation and load fail-open validations completed (see docs/Plan/PHASE1_CANARY_VALIDATION_2026-04-17.md).
 
-## Phase 4 Remaining Work
+## Phase 2 Next Work (WebContainer Runtime)
 
-1. Implement P4-2 context compaction behind feature flag using non-authoritative summaries.
-2. Add deterministic compaction boundary tests (no compaction before threshold, compaction at threshold).
-3. Add integration test for invalid summary contract payload rejection without chat-path failure.
-4. Add telemetry coverage for summary-triggered, summary-skipped, and summary-rejected outcomes.
-
-## Phase 5 Planned Work
-
-1. Promote backend resolved_action contract from shadow-only to production response behavior under flag.
-2. Remove residual string-trigger based transition logic from canonical conversation flow.
-3. Add end-to-end tests for canonical action resolution outcomes (respond, ask_clarification, ready_to_generate, propose_revision).
-4. Define and run canary rollout with measurable quality gates before full cutover.
+1. Run staging preview latency benchmark (preferred: `eval/load/run-preview-latency.ps1`; fallback: `eval/load/preview_latency_benchmark.py`) and verify p95 total <= 1.5s in `eval/load/phase2_preview_latency_report.json`.
+2. Capture benchmark evidence in `docs/Plan/PHASE2_PREVIEW_LATENCY_VALIDATION_2026-04-17.md` after the staging run completes.
 
 ## Documentation Follow-Up (No Behavioral Change)
 

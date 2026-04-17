@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     POLL_INTERVAL: int = 2  # seconds
     JOB_TIMEOUT: int = 300  # 5 minutes
     MAX_RETRIES: int = 3
+
+    # Observability
+    WORKER_METRICS_LOG_INTERVAL_SECONDS: int = 30
+    WORKER_TRACE_PROPAGATION_ENABLED: bool = True
     
     # Debugging
     DEBUG: bool = False

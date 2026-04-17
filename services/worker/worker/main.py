@@ -9,11 +9,12 @@ Polls database for queued jobs and processes them.
 import asyncio
 import signal
 import sys
+import time
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 import structlog
 
@@ -65,6 +66,7 @@ class Worker:
             settings.INFERENCE_URL,
             api_url=settings.API_URL
         )
+        self._next_metrics_log_at = time.time() + settings.WORKER_METRICS_LOG_INTERVAL_SECONDS
     
     async def start(self):
         """Start the worker."""
@@ -88,6 +90,10 @@ class Worker:
                 else:
                     # No jobs available, wait before polling again
                     await asyncio.sleep(settings.POLL_INTERVAL)
+
+                if time.time() >= self._next_metrics_log_at:
+                    await self._log_metrics_snapshot()
+                    self._next_metrics_log_at = time.time() + settings.WORKER_METRICS_LOG_INTERVAL_SECONDS
                     
             except Exception as e:
                 logger.error("Worker error", error=str(e))
@@ -142,6 +148,31 @@ class Worker:
                 "input": job.input,
                 "spark_cost": job.spark_cost,
             }
+
+    async def _queue_depths(self) -> dict[str, int]:
+        """Collect queue depth snapshot for observability logs."""
+        async with self.session_factory() as session:
+            queued_result = await session.execute(
+                select(func.count()).select_from(Job).where(Job.status == "queued")
+            )
+            processing_result = await session.execute(
+                select(func.count()).select_from(Job).where(Job.status == "processing")
+            )
+            return {
+                "queued": int(queued_result.scalar() or 0),
+                "processing": int(processing_result.scalar() or 0),
+            }
+
+    async def _log_metrics_snapshot(self) -> None:
+        queue_depth = await self._queue_depths()
+        processor_stats = self.processor.get_stats()
+        logger.info(
+            "worker_metrics_snapshot",
+            worker_id=self.worker_id,
+            queue_depth=queue_depth,
+            processor=processor_stats,
+            poll_interval_seconds=settings.POLL_INTERVAL,
+        )
 
 
 # Import Job model for the query
