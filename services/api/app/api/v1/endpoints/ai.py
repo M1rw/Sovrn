@@ -406,19 +406,27 @@ def _attach_phase5_response_metadata(
     *,
     model_content: str,
     reason_hint: Optional[str] = None,
+    conversation_metadata: Optional[Dict[str, Any]] = None,
 ):
-    """Attach optional Phase 5 resolved-action fields behind feature flag."""
-    if not settings.AI_RESOLVED_ACTION_RESPONSE_ENABLED:
+    """Attach optional response metadata behind feature flags."""
+    include_resolved_action = settings.AI_RESOLVED_ACTION_RESPONSE_ENABLED
+    include_conversation_metadata = bool(conversation_metadata)
+
+    if not include_resolved_action and not include_conversation_metadata:
         return base_response
 
     payload = base_response.model_dump(mode="json")
-    payload.update(
-        _resolve_backend_action_metadata(
-            request,
-            model_content,
-            reason_hint=reason_hint,
+    if include_resolved_action:
+        payload.update(
+            _resolve_backend_action_metadata(
+                request,
+                model_content,
+                reason_hint=reason_hint,
+            )
         )
-    )
+    if include_conversation_metadata:
+        payload.update(conversation_metadata or {})
+
     return JSONResponse(content=payload)
 
 
@@ -673,14 +681,17 @@ async def _maybe_persist_non_authoritative_summary(
     )
 
 
-async def _persist_conversation_shadow_state(request: ChatRequest, response: AIResponse) -> None:
+async def _persist_conversation_shadow_state(
+    request: ChatRequest,
+    response: AIResponse,
+) -> Optional[Dict[str, Any]]:
     """Persist canonical conversation thread/turn/snapshot state behind feature flag."""
     if not settings.AI_STATE_PERSIST_ENABLED:
-        return
+        return None
 
     if request.user_id is None:
         logger.info("ai_conversation_persist_skipped", reason="missing_user_id")
-        return
+        return None
 
     idempotency_key = request.idempotency_key or _derive_idempotency_key(request)
     user_message = _latest_user_message(request)
@@ -711,7 +722,12 @@ async def _persist_conversation_shadow_state(request: ChatRequest, response: AIR
                     thread_id=str(thread.id),
                     turn_id=str(existing_turn.id),
                 )
-                return
+                return {
+                    "thread_id": str(thread.id),
+                    "turn_index": int(existing_turn.turn_index),
+                    "state_version": int(thread.state_version),
+                    "idempotency_key": idempotency_key,
+                }
 
             turn_index = int(thread.last_turn_index) + 1
             turn = await repository.append_turn(
@@ -739,7 +755,7 @@ async def _persist_conversation_shadow_state(request: ChatRequest, response: AIR
             authoritative_state["last_provider"] = response.provider.value
             authoritative_state["last_response_success"] = bool(response.success)
 
-            await repository.write_state_snapshot(
+            snapshot = await repository.write_state_snapshot(
                 thread_id=thread.id,
                 expected_version=int(thread.state_version),
                 authoritative_state=authoritative_state,
@@ -761,8 +777,14 @@ async def _persist_conversation_shadow_state(request: ChatRequest, response: AIR
                 "ai_conversation_persisted",
                 thread_id=str(thread.id),
                 turn_id=str(turn.id),
-                state_version=int(thread.state_version),
+                state_version=int(snapshot.state_version),
             )
+            return {
+                "thread_id": str(thread.id),
+                "turn_index": turn_index,
+                "state_version": int(snapshot.state_version),
+                "idempotency_key": idempotency_key,
+            }
     except ConversationVersionConflictError as e:
         logger.warning(
             "ai_conversation_persist_version_conflict",
@@ -770,11 +792,14 @@ async def _persist_conversation_shadow_state(request: ChatRequest, response: AIR
             expected_version=e.expected_version,
             current_version=e.current_version,
         )
+        return None
     except ConversationRepositoryError as e:
         logger.warning("ai_conversation_persist_repository_error", error_type=type(e).__name__)
+        return None
     except Exception as e:
         # Persistence must fail open and never break chat completion behavior.
         logger.error("ai_conversation_persist_exception", error_type=type(e).__name__)
+        return None
 
 
 # =============================================================================
@@ -839,7 +864,7 @@ async def chat_completion(request: ChatRequest):
         )
 
         _run_structured_shadow_parse(request, response.content or "")
-        await _persist_conversation_shadow_state(request, response)
+        conversation_metadata = await _persist_conversation_shadow_state(request, response)
 
         latency_ms = int((time.monotonic() - start_time) * 1000)
 
@@ -851,6 +876,7 @@ async def chat_completion(request: ChatRequest):
                 fallback,
                 model_content=response.content or "",
                 reason_hint=response.error or "empty_ai_response",
+                conversation_metadata=conversation_metadata,
             )
         
         chat_response = ChatResponse(
@@ -866,6 +892,7 @@ async def chat_completion(request: ChatRequest):
             request,
             chat_response,
             model_content=response.content or "",
+            conversation_metadata=conversation_metadata,
         )
 
     except asyncio.TimeoutError:

@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -20,7 +20,7 @@ interface DashboardHeaderProps {
   user: {
     id: string;
     email: string;
-    name?: string;
+    name?: string | null;
   };
 }
 
@@ -136,3 +136,4 @@ export function DashboardHeader({ user }: DashboardHeaderProps) {
     </header>
   );
 }
+

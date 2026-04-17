@@ -84,55 +84,92 @@ def create_refresh_token(subject: str) -> str:
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
 
-def decode_token(token: str) -> Optional[TokenData]:
-    """Decode and validate a JWT token."""
+def create_preview_session_token(
+    subject: str,
+    project_id: str,
+    generation_id: str,
+    entrypoint: str,
+    expires_delta: Optional[timedelta] = None,
+    additional_claims: Optional[dict[str, Any]] = None,
+) -> tuple[str, datetime]:
+    """Create a short-lived JWT token for preview runtime bootstrap."""
+    now = datetime.now(timezone.utc)
+
+    if expires_delta:
+        expire = now + expires_delta
+    else:
+        expire = now + timedelta(seconds=settings.PREVIEW_SESSION_TOKEN_TTL_SECONDS)
+
+    payload: dict[str, Any] = {
+        "sub": str(subject),
+        "exp": expire,
+        "iat": now,
+        "type": "preview_session",
+        "project_id": str(project_id),
+        "generation_id": str(generation_id),
+        "entrypoint": entrypoint,
+    }
+
+    if additional_claims:
+        payload.update(additional_claims)
+
+    token = jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
+    return token, expire
+
+
+def decode_token_payload(token: str, token_type: Optional[str] = None) -> Optional[dict[str, Any]]:
+    """Decode a JWT payload and optionally enforce token type."""
     try:
         payload = jwt.decode(
             token,
             settings.JWT_SECRET,
             algorithms=[settings.JWT_ALGORITHM]
         )
-        
-        user_id = payload.get("sub")
-        exp = payload.get("exp")
-        
-        if not user_id or not exp:
-            return None
-        
-        return TokenData(
-            user_id=user_id,
-            expires_at=datetime.fromtimestamp(exp, tz=timezone.utc)
-        )
     except JWTError:
         return None
+
+    if token_type and payload.get("type") != token_type:
+        return None
+
+    return payload
+
+
+def decode_token(token: str) -> Optional[TokenData]:
+    """Decode and validate a JWT token."""
+    payload = decode_token_payload(token)
+    if not payload:
+        return None
+
+    user_id = payload.get("sub")
+    exp = payload.get("exp")
+
+    if not user_id or not exp:
+        return None
+
+    return TokenData(
+        user_id=user_id,
+        expires_at=datetime.fromtimestamp(exp, tz=timezone.utc)
+    )
 
 
 def verify_token(token: str, token_type: str = "access") -> Optional[TokenData]:
     """Verify a token and check its type."""
-    try:
-        payload = jwt.decode(
-            token,
-            settings.JWT_SECRET,
-            algorithms=[settings.JWT_ALGORITHM]
-        )
-        
-        if payload.get("type") != token_type:
-            return None
-        
-        user_id = payload.get("sub")
-        exp = payload.get("exp")
-        
-        if not user_id or not exp:
-            return None
-        
-        # Check expiration
-        exp_datetime = datetime.fromtimestamp(exp, tz=timezone.utc)
-        if exp_datetime < datetime.now(timezone.utc):
-            return None
-        
-        return TokenData(
-            user_id=user_id,
-            expires_at=exp_datetime
-        )
-    except JWTError:
+    payload = decode_token_payload(token, token_type=token_type)
+    if not payload:
         return None
+
+    user_id = payload.get("sub")
+    exp = payload.get("exp")
+
+    if not user_id or not exp:
+        return None
+
+    # Check expiration
+    exp_datetime = datetime.fromtimestamp(exp, tz=timezone.utc)
+    if exp_datetime < datetime.now(timezone.utc):
+        return None
+
+    return TokenData(
+        user_id=user_id,
+        expires_at=exp_datetime
+    )
