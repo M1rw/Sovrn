@@ -24,8 +24,8 @@ def _coerce_style(value: Any) -> WebsiteStyle:
     try:
         if isinstance(value, str):
             return WebsiteStyle(value.lower())
-    except Exception:
-        pass
+    except ValueError:
+        return WebsiteStyle.MODERN
     return WebsiteStyle.MODERN
 
 
@@ -37,20 +37,20 @@ def _truncate_utf8_bytes(content: str, max_bytes: int) -> str:
 
 
 def _build_starter_template(style: str) -> dict[str, Any]:
-        palette = {
-                "modern": ("#2563eb", "#0f172a"),
-                "minimal": ("#334155", "#111827"),
-                "bold": ("#dc2626", "#111827"),
-                "elegant": ("#7c3aed", "#1f2937"),
-                "playful": ("#ea580c", "#0f172a"),
-                "corporate": ("#0ea5e9", "#0f172a"),
-                "dark": ("#38bdf8", "#e2e8f0"),
-                "light": ("#2563eb", "#0f172a"),
-        }
-        accent, text_color = palette.get(style, palette["modern"])
-        bg_color = "#0b1220" if style == "dark" else "#f8fafc"
+    palette = {
+        "modern": ("#2563eb", "#0f172a"),
+        "minimal": ("#334155", "#111827"),
+        "bold": ("#dc2626", "#111827"),
+        "elegant": ("#7c3aed", "#1f2937"),
+        "playful": ("#ea580c", "#0f172a"),
+        "corporate": ("#0ea5e9", "#0f172a"),
+        "dark": ("#38bdf8", "#e2e8f0"),
+        "light": ("#2563eb", "#0f172a"),
+    }
+    accent, text_color = palette.get(style, palette["modern"])
+    bg_color = "#0b1220" if style == "dark" else "#f8fafc"
 
-        html = """<!doctype html>
+    html = """<!doctype html>
 <html lang=\"en\">
     <head>
         <meta charset=\"utf-8\" />
@@ -70,7 +70,7 @@ def _build_starter_template(style: str) -> dict[str, Any]:
 </html>
 """
 
-        css = f"""* {{ box-sizing: border-box; }}
+    css = f"""* {{ box-sizing: border-box; }}
 body {{ margin: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: {bg_color}; color: {text_color}; }}
 .shell {{ min-height: 100vh; display: grid; gap: 1rem; place-content: center; padding: 2.5rem; text-align: center; }}
 .badge {{ display: inline-block; margin: 0 auto; padding: 0.4rem 0.75rem; border-radius: 9999px; background: {accent}; color: white; font-size: 0.8rem; font-weight: 600; }}
@@ -79,7 +79,7 @@ p {{ margin: 0 auto; max-width: 42rem; color: rgba(30, 41, 59, 0.85); }}
 button {{ margin: 0 auto; border: 0; border-radius: 0.75rem; padding: 0.8rem 1.15rem; background: {accent}; color: white; font-weight: 600; cursor: pointer; }}
 """
 
-        js = """(function () {
+    js = """(function () {
     const btn = document.querySelector('button');
     if (!btn) return;
     btn.addEventListener('click', function () {
@@ -89,23 +89,23 @@ button {{ margin: 0 auto; border: 0; border-radius: 0.75rem; padding: 0.8rem 1.1
 })();
 """
 
-        preview_html = html.replace(
-                '<link rel="stylesheet" href="styles.css" />',
-                f"<style>{css}</style>",
-        ).replace(
-                '<script src="script.js"></script>',
-                f"<script>{js}</script>",
-        )
+    preview_html = html.replace(
+        '<link rel="stylesheet" href="styles.css" />',
+        f"<style>{css}</style>",
+    ).replace(
+        '<script src="script.js"></script>',
+        f"<script>{js}</script>",
+    )
 
-        return {
-                "files": {
-                        "index.html": html,
-                        "styles.css": css,
-                        "script.js": js,
-                },
-                "preview_html": preview_html,
-                "design_style": style,
-        }
+    return {
+        "files": {
+            "index.html": html,
+            "styles.css": css,
+            "script.js": js,
+        },
+        "preview_html": preview_html,
+        "design_style": style,
+    }
 
 
 class GenerationService:

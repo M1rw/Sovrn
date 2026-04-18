@@ -7,9 +7,9 @@ Configuration for the inference service using llama.cpp
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -30,6 +30,19 @@ class Settings(BaseSettings):
     PORT: int = 8080
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "json"  # json or console
+
+    CORS_ORIGINS: List[str] = Field(default_factory=lambda: [
+        "http://localhost:3000",
+        "http://localhost:8000",
+    ])
+    CORS_ALLOW_CREDENTIALS: bool = True
+
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, v):
+        if isinstance(v, str):
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        return v
     
     # ==========================================================================
     # Model Configuration

@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     
     model_config = SettingsConfigDict(
         env_file=".env",
+        env_file_encoding="utf-8",
         case_sensitive=True,
         extra="ignore"
     )
@@ -22,16 +23,16 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     
     # Services
-    INFERENCE_URL: str = "http://infer:8080"
-    API_URL: str = "http://api:8000"
+    INFERENCE_URL: str = Field(default="http://infer:8080")
+    API_URL: str = Field(default="http://api:8000")
     
     # Worker
-    POLL_INTERVAL: int = 2  # seconds
-    JOB_TIMEOUT: int = 300  # 5 minutes
-    MAX_RETRIES: int = 3
+    POLL_INTERVAL: int = Field(default=2, ge=1, le=300)  # seconds
+    JOB_TIMEOUT: int = Field(default=300, ge=5, le=3600)  # seconds
+    MAX_RETRIES: int = Field(default=3, ge=0, le=20)
 
     # Observability
-    WORKER_METRICS_LOG_INTERVAL_SECONDS: int = 30
+    WORKER_METRICS_LOG_INTERVAL_SECONDS: int = Field(default=30, ge=5, le=3600)
     WORKER_TRACE_PROPAGATION_ENABLED: bool = True
     
     # Debugging
@@ -43,7 +44,6 @@ class Settings(BaseSettings):
     # Logging
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "json"
-    DEBUG: bool = False
 
 
 settings = Settings()

@@ -384,7 +384,7 @@ class InferenceEngine:
                     }]
                 }
                 
-                yield f"data: {chunk}\n\n"
+                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
             
             # Final chunk
             yield f"data: [DONE]\n\n"
@@ -448,10 +448,58 @@ class InferenceEngine:
             )
         )
     
-    def _generate_stream_text(self, request_id: str, prompt: str, request: CompletionRequest, start_time: float):
+    def _generate_stream_text(
+        self,
+        request_id: str,
+        prompt: str,
+        request: CompletionRequest,
+        start_time: float,
+    ) -> AsyncIterator[str]:
         """Generate streaming text completion."""
-        # Similar to _generate_stream but for text completion
-        pass
+        model = model_manager.get_model()
+
+        async def generate():
+            tokens_generated = 0
+
+            for output in model(
+                prompt,
+                max_tokens=request.max_tokens,
+                temperature=request.temperature,
+                top_p=request.top_p,
+                stop=request.stop or [],
+                stream=True,
+            ):
+                token = output["choices"][0]["text"]
+                tokens_generated += 1
+
+                chunk = {
+                    "id": request_id,
+                    "object": "text_completion.chunk",
+                    "created": int(start_time),
+                    "model": request.model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "text": token,
+                            "finish_reason": None,
+                        }
+                    ],
+                }
+                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+
+            yield "data: [DONE]\n\n"
+
+            self.total_tokens_generated += tokens_generated
+            duration = time.time() - start_time
+            logger.info(
+                "text_completion_stream_complete",
+                request_id=request_id,
+                duration_seconds=duration,
+                tokens_generated=tokens_generated,
+                tokens_per_second=tokens_generated / duration if duration > 0 else 0,
+            )
+
+        return generate()
     
     def _messages_to_prompt(self, messages: List[Message]) -> str:
         """
@@ -509,7 +557,7 @@ class InferenceEngine:
         code_signals = ["code", "json", "typescript", "javascript", "css", "html", "api response", "schema"]
         if any(sig in corpus for sig in code_signals):
             return "qwen-coder"
-        return "llama-vision"
+        return "phi-3-mini"
 
     def _resolve_model_path(self, model_name: Optional[str]):
         """Return Path for requested model name or default."""
@@ -555,7 +603,7 @@ class InferenceEngine:
     def _try_json(self, payload: str):
         try:
             return json.loads(payload)
-        except Exception:
+        except json.JSONDecodeError:
             return None
 
 

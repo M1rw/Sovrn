@@ -5,20 +5,19 @@
 Processes generation jobs by calling agents.
 """
 
-import json
 import time
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
 from secrets import token_hex
+from typing import Any
 from uuid import UUID
 
 import httpx
-from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy import update
+from sqlalchemy.ext.asyncio import async_sessionmaker
 import structlog
 
 from worker.config import settings
+from worker.db_models import Job
 
 
 logger = structlog.get_logger()
@@ -27,10 +26,10 @@ logger = structlog.get_logger()
 class JobProcessor:
     """Processes generation jobs."""
     
-    def __init__(self, session_factory: async_sessionmaker, inference_url: str, api_url: str = "http://api:8000"):
+    def __init__(self, session_factory: async_sessionmaker, inference_url: str, api_url: str | None = None):
         self.session_factory = session_factory
         self.inference_url = inference_url
-        self.api_url = api_url
+        self.api_url = api_url or settings.API_URL
         self._stats = {
             "processed": 0,
             "succeeded": 0,
@@ -78,7 +77,7 @@ class JobProcessor:
         
         try:
             # Call API to run generation pipeline with real AI agents
-            async with httpx.AsyncClient(timeout=settings.JOB_TIMEOUT) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(settings.JOB_TIMEOUT)) as client:
                 response = await client.post(
                     f"{self.api_url}/api/v1/internal/process-job",
                     json={"job_id": str(job_id)},
@@ -88,9 +87,12 @@ class JobProcessor:
                 if response.status_code != 200:
                     error_text = response.text
                     logger.error("API call failed", status=response.status_code, error=error_text)
-                    raise Exception(f"Generation failed: {error_text}")
-                
-                result = response.json()
+                    raise RuntimeError(f"Generation failed: {error_text}")
+
+                try:
+                    result = response.json()
+                except ValueError as exc:
+                    raise RuntimeError("Generation API returned invalid JSON payload") from exc
             
             # Extract the output
             output = result.get("output", {})
@@ -115,6 +117,16 @@ class JobProcessor:
             self._stats["last_duration_ms"] = duration_ms
             self._stats["last_error"] = None
             logger.info("Job completed", job_id=str(job_id))
+
+        except httpx.HTTPError as e:
+            logger.error("Job failed with HTTP error", job_id=str(job_id), error=str(e))
+            await self._fail_job(job_id, f"HTTP error while processing job: {e}")
+            duration_ms = (time.perf_counter() - started_at) * 1000
+            self._stats["processed"] += 1
+            self._stats["failed"] += 1
+            self._stats["total_duration_ms"] += duration_ms
+            self._stats["last_duration_ms"] = duration_ms
+            self._stats["last_error"] = str(e)
             
         except Exception as e:
             logger.error("Job failed", job_id=str(job_id), error=str(e))
@@ -167,31 +179,3 @@ class JobProcessor:
                 )
             )
             await session.commit()
-
-
-# Import Job model
-from sqlalchemy import Column, String, Integer, DateTime, Enum as SQLEnum, Text
-from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB
-from sqlalchemy.orm import DeclarativeBase
-
-
-class Base(DeclarativeBase):
-    pass
-
-
-class Job(Base):
-    __tablename__ = "jobs"
-    
-    id = Column(PGUUID(as_uuid=True), primary_key=True)
-    project_id = Column(PGUUID(as_uuid=True), nullable=False)
-    type = Column(SQLEnum('strategy', 'design', 'engineer', 'full', name='job_type'), nullable=False)
-    status = Column(SQLEnum('queued', 'processing', 'completed', 'failed', 'cancelled', name='job_status'), nullable=False)
-    spark_cost = Column(Integer, default=1)
-    priority = Column(Integer, default=0)
-    input = Column(JSONB, default={})
-    output = Column(JSONB, default={})
-    error = Column(Text)
-    started_at = Column(DateTime(timezone=True))
-    completed_at = Column(DateTime(timezone=True))
-    created_at = Column(DateTime(timezone=True))
-    worker_id = Column(String(100))

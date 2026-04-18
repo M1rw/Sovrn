@@ -48,7 +48,6 @@ logger = structlog.get_logger()
 
 requests_total = None
 request_duration = None
-tokens_generated_total = None
 active_requests = None
 
 
@@ -98,7 +97,7 @@ def _process_metrics() -> dict:
             rss_mb = round(rss_value / (1024 * 1024), 2)
         else:
             rss_mb = round(rss_value / 1024, 2)
-    except Exception:
+    except (ImportError, AttributeError, OSError, ValueError):
         rss_mb = None
 
     return {
@@ -116,7 +115,7 @@ def _gpu_metrics() -> dict:
     ]
     try:
         completed = subprocess.run(command, capture_output=True, text=True, check=False, timeout=2)
-    except Exception:
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         return {
             "available": False,
             "detail": "nvidia-smi not available",
@@ -195,10 +194,11 @@ app = FastAPI(
 )
 
 # CORS
+allow_credentials = settings.CORS_ALLOW_CREDENTIALS and "*" not in settings.CORS_ORIGINS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict in production
-    allow_credentials=True,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -332,7 +332,7 @@ async def get_system_metrics():
 @app.post("/v1/chat/completions")
 async def create_chat_completion(
     request: ChatCompletionRequest
-) -> ChatCompletionResponse:
+) -> ChatCompletionResponse | StreamingResponse:
     """
     Create chat completion (OpenAI-compatible).
     
@@ -357,19 +357,21 @@ async def create_chat_completion(
             response = await inference_engine.chat_completion(request)
             return response
             
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(
             "chat_completion_error",
             error=str(e),
             messages_count=len(request.messages)
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Inference request failed")
 
 
 @app.post("/v1/completions")
 async def create_completion(
     request: CompletionRequest
-) -> CompletionResponse:
+) -> CompletionResponse | StreamingResponse:
     """
     Create text completion (OpenAI-compatible).
     """
@@ -390,13 +392,15 @@ async def create_completion(
             response = await inference_engine.text_completion(request)
             return response
             
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(
             "text_completion_error",
             error=str(e),
             prompt_length=len(request.prompt)
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Inference request failed")
 
 
 @app.get("/v1/models")
@@ -445,9 +449,11 @@ async def load_model(model_name: str):
             "model": model_manager.get_model_info()
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("model_load_error", model_name=model_name, error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Model load failed")
 
 
 @app.post("/admin/unload-model")
@@ -462,46 +468,29 @@ async def unload_model():
 # =============================================================================
 
 if settings.ENABLE_METRICS:
-    from prometheus_client import Counter, Histogram, Gauge, make_asgi_app, CollectorRegistry, REGISTRY
-    
-    # Check if metrics already registered (for reloads)
-    try:
-        requests_total = Counter(
-            'inference_requests_total',
-            'Total inference requests',
-            ['endpoint', 'status']
-        )
-    except ValueError:
-        # Already registered, get from registry
-        requests_total = REGISTRY._names_to_collectors['inference_requests_total']
-    
-    try:
-        request_duration = Histogram(
-            'inference_request_duration_seconds',
-            'Request duration in seconds',
-            ['endpoint']
-        )
-    except ValueError:
-        request_duration = REGISTRY._names_to_collectors['inference_request_duration_seconds']
-    
-    try:
-        tokens_generated_total = Counter(
-            'inference_tokens_generated_total',
-            'Total tokens generated'
-        )
-    except ValueError:
-        tokens_generated_total = REGISTRY._names_to_collectors['inference_tokens_generated_total']
-    
-    try:
-        active_requests = Gauge(
-            'inference_active_requests',
-            'Currently active inference requests'
-        )
-    except ValueError:
-        active_requests = REGISTRY._names_to_collectors['inference_active_requests']
-    
+    from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, make_asgi_app
+
+    metrics_registry = CollectorRegistry(auto_describe=True)
+    requests_total = Counter(
+        "inference_requests_total",
+        "Total inference requests",
+        ["endpoint", "status"],
+        registry=metrics_registry,
+    )
+    request_duration = Histogram(
+        "inference_request_duration_seconds",
+        "Request duration in seconds",
+        ["endpoint"],
+        registry=metrics_registry,
+    )
+    active_requests = Gauge(
+        "inference_active_requests",
+        "Currently active inference requests",
+        registry=metrics_registry,
+    )
+
     # Mount metrics endpoint
-    metrics_app = make_asgi_app()
+    metrics_app = make_asgi_app(registry=metrics_registry)
     app.mount("/metrics", metrics_app)
 
 
