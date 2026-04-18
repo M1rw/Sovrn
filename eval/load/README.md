@@ -74,6 +74,19 @@ powershell -ExecutionPolicy Bypass -File eval/load/check-preview-latency-prereqs
 
 This prints presence of required `SOVRN_*` environment variables and probes `/health` reachability before running the benchmark.
 
+Canary metric check (PowerShell):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File eval/load/check-preview-canary-metrics.ps1 -WebBaseUrl 'https://<staging-web-host>'
+```
+
+This validates preview canary metrics from the web telemetry snapshot endpoint (`/api/v1/telemetry/client-metrics`) including:
+
+- `builder_preview_render_ms` p95 threshold
+- `builder_preview_stream_update_count` minimum activity
+- `builder_preview_stream_reconnect_count` maximum threshold
+- `builder_preview_runtime_restart_count` maximum threshold
+
 PowerShell example:
 
 ```powershell

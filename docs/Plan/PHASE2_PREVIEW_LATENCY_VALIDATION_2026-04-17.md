@@ -76,12 +76,13 @@ Latest local mock dry-run (2026-04-17, non-gating sanity check):
 - Command: `powershell -ExecutionPolicy Bypass -File eval/load/run-preview-latency.ps1 -BaseUrl http://127.0.0.1:8000 -Token mock-token -ProjectId mock-project -Iterations 5 -Warmup 1 -OutputPath eval/load/phase2_preview_latency_report.local_mock.json`
 - Report: `eval/load/phase2_preview_latency_report.local_mock.json`
 - successful iterations: 5/5
-- p50 total latency: 29.12 ms
-- p95 total latency: 31.78 ms
-- p99 total latency: 32.00 ms
-- p95 stream first update latency: 12.76 ms
+- p50 total latency: 5.06 ms
+- p95 total latency: 6.57 ms
+- p99 total latency: 6.80 ms
+- p95 stream first update latency: 2.94 ms
 - gate status in mock run: PASS
 - Note: this validates harness wiring only and does not satisfy the staging gate.
+- Note: `run-preview-latency.ps1` was hardened to use `-LiteralPath` operations so it runs correctly from bracketed clone paths such as `E:\Synthos\[Sovrn]`.
 
 ## Result
 

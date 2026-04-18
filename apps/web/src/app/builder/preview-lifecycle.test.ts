@@ -1,6 +1,7 @@
 import {
   getPreviewStreamFallbackMessage,
   getPreviewStreamStateOnError,
+  PreviewStreamState,
   shouldMarkPreviewStreamStale,
   toMountDescriptorFromArtifact,
   toMountDescriptorFromPreviewUpdate,
@@ -101,7 +102,7 @@ describe('preview lifecycle helpers', () => {
   });
 
   it('supports stale and reconnect lifecycle transitions', () => {
-    let streamState: 'connecting' | 'live' | 'stale' | 'disconnected' | 'error' = 'connecting';
+    let streamState: PreviewStreamState = 'connecting';
     let lastEventAt: number | null = null;
     let reconnectNonce = 0;
 
