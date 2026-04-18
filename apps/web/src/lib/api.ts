@@ -478,6 +478,7 @@ export interface CreateProjectData {
 export interface GenerateSiteData {
   brief: string;
   locale?: string;
+  quality_mode?: 'fast' | 'balanced' | 'high';
   industry?: string;
   business_type?: string;
   target_audience?: Record<string, unknown>;

@@ -132,7 +132,7 @@ Use these IDs in API and inference logs to trace saturation and failure points.
 
 The benchmark writes a machine-readable report by default to:
 
-- `eval/load/phase2_preview_latency_report.json`
+- `eval/load/preview_latency_report.json`
 
 Gate expectation:
 

@@ -7,17 +7,28 @@ These endpoints are not exposed to external users.
 """
 
 from uuid import UUID
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timezone
+from typing import Any
 from pydantic import BaseModel
 from app.lib import regression_checks
 
 from app.api.v1.deps import get_db
 from app.models import Job, Project, SiteGeneration
 from app.services.generation import GenerationService
+from app.services.orchestration import (
+    GenerationOrchestrator,
+    OrchestrationCancelledError,
+    OrchestrationContext,
+    map_ui_quality_to_target_mode,
+    normalize_ui_quality_mode,
+    resolve_generation_lane,
+    select_aqe_level,
+)
 from app.core.config import settings
 import structlog
 
@@ -40,6 +51,42 @@ class RegressionCheckResponse(BaseModel):
     failing: list[str]
 
 
+async def _get_queue_depth(db: AsyncSession) -> int:
+    queued_result = await db.execute(
+        select(func.count()).select_from(Job).where(Job.status == "queued")
+    )
+    return int(queued_result.scalar() or 0)
+
+
+async def _get_inference_stats() -> dict[str, Any]:
+    if not settings.ORCHESTRATION_AQE_ENABLED:
+        return {}
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=settings.ORCHESTRATION_AQE_INFERENCE_STATS_TIMEOUT_SECONDS
+        ) as client:
+            response = await client.get(f"{settings.INFERENCE_URL.rstrip('/')}/stats")
+            response.raise_for_status()
+            payload = response.json()
+            return payload if isinstance(payload, dict) else {}
+    except Exception as exc:
+        logger.warning("orchestration_inference_stats_unavailable", error=str(exc))
+        return {}
+
+
+async def _persist_orchestration_progress(
+    db: AsyncSession,
+    job: Job,
+    orchestration_state: dict[str, Any],
+) -> None:
+    output = job.output if isinstance(job.output, dict) else {}
+    output["orchestration"] = orchestration_state
+    output["status"] = "processing"
+    job.output = output
+    await db.commit()
+
+
 def _site_generation_to_output(site_gen: SiteGeneration) -> dict:
     """Reconstruct a canonical generation output payload from persisted fields."""
     files_payload = site_gen.files if isinstance(site_gen.files, list) else []
@@ -60,6 +107,7 @@ def _site_generation_to_output(site_gen: SiteGeneration) -> dict:
         "design_style": code_output.get("design_style"),
         "generation_time_ms": code_output.get("generation_time_ms"),
         "status": code_output.get("status", "completed"),
+        "orchestration": code_output.get("orchestration", {}),
         "lighthouse_scores": site_gen.lighthouse_scores if isinstance(site_gen.lighthouse_scores, dict) else {},
         "generation_id": str(site_gen.id),
     }
@@ -74,6 +122,7 @@ async def process_job(
     Process a generation job.
     Called by worker service to run the AI generation pipeline.
     """
+    job_uuid: UUID | None = None
     try:
         job_uuid = UUID(request.job_id)
         
@@ -117,19 +166,80 @@ async def process_job(
         
         # Initialize generation service
         gen_service = GenerationService(db, settings.INFERENCE_URL)
+
+        job_type = job.type.value if hasattr(job.type, "value") else str(job.type)
+        job_input = job.input if isinstance(job.input, dict) else {}
         
         # Run the generation pipeline based on job type
-        if job.type == "full":
-            # Run full pipeline: Strategist -> Designer -> Engineer
-            result = await gen_service.generate_full(project, job.input)
-        elif job.type == "strategy":
-            result = await gen_service.generate_strategy(project, job.input)
-        elif job.type == "design":
-            result = await gen_service.generate_design(project, job.input)
-        elif job.type == "engineer":
-            result = await gen_service.generate_code(project, job.input)
+        if job_type == "full" and settings.ORCHESTRATION_RUNTIME_ENABLED:
+            queue_depth = await _get_queue_depth(db)
+            infer_stats = await _get_inference_stats()
+
+            orchestration_input = job_input.get("orchestration_profile")
+            orchestration_payload = (
+                orchestration_input
+                if isinstance(orchestration_input, dict)
+                else {}
+            )
+
+            quality_mode = normalize_ui_quality_mode(
+                orchestration_payload.get("quality_mode")
+                if isinstance(orchestration_payload.get("quality_mode"), str)
+                else job_input.get("quality_mode")
+            )
+            target_mode = map_ui_quality_to_target_mode(quality_mode)
+            lane = resolve_generation_lane(quality_mode)
+            aqe_level = select_aqe_level(queue_depth=queue_depth, infer_stats=infer_stats)
+
+            async def _progress_callback(orchestration_state: dict[str, Any]) -> None:
+                await _persist_orchestration_progress(db=db, job=job, orchestration_state=orchestration_state)
+
+            orchestrator = GenerationOrchestrator(
+                OrchestrationContext(
+                    db=db,
+                    job_id=job.id,
+                    generation_service=gen_service,
+                    project=project,
+                    input_data=job_input,
+                    quality_mode=quality_mode,
+                    target_mode=target_mode,
+                    lane=lane,
+                    aqe_level=aqe_level,
+                    queue_depth=queue_depth,
+                    infer_stats=infer_stats,
+                    progress_callback=_progress_callback,
+                )
+            )
+
+            try:
+                result = await orchestrator.run()
+            except OrchestrationCancelledError:
+                cancellation_output = {
+                    "orchestration": orchestrator.state,
+                    "status": "cancelled",
+                }
+                job.output = cancellation_output
+                await db.commit()
+                logger.info("Job cancelled during orchestration", job_id=str(job_uuid))
+                return {
+                    "success": False,
+                    "cancelled": True,
+                    "job_id": str(job_uuid),
+                    "output": cancellation_output,
+                }
+        elif job_type == "full":
+            result = await gen_service.generate_full(project, job_input)
+        elif job_type == "strategy":
+            result = await gen_service.generate_strategy(project, job_input)
+        elif job_type == "design":
+            result = await gen_service.generate_design(project, job_input)
+        elif job_type == "engineer":
+            result = await gen_service.generate_code(project, job_input)
         else:
-            raise HTTPException(status_code=400, detail=f"Unknown job type: {job.type}")
+            raise HTTPException(status_code=400, detail=f"Unknown job type: {job_type}")
+
+        if not isinstance(result, dict):
+            raise RuntimeError("Generation pipeline returned invalid payload")
         
         # Build persistence payloads that match the SiteGeneration ORM contract.
         strategy_output = result.get("strategy", {}) if isinstance(result, dict) else {}
@@ -151,6 +261,7 @@ async def process_job(
             "design_style": result.get("design_style") if isinstance(result, dict) else None,
             "generation_time_ms": result.get("generation_time_ms") if isinstance(result, dict) else None,
             "status": result.get("status") if isinstance(result, dict) else None,
+            "orchestration": result.get("orchestration") if isinstance(result, dict) else None,
         }
 
         version_result = await db.execute(
@@ -211,7 +322,11 @@ async def process_job(
         }
         
     except Exception as e:
-        logger.error("Job processing failed", job_id=str(job_uuid), error=str(e))
+        logger.error(
+            "Job processing failed",
+            job_id=str(job_uuid) if job_uuid else request.job_id,
+            error=str(e),
+        )
         await db.rollback()
         raise HTTPException(status_code=500, detail=f"Job processing failed: {str(e)}")
 

@@ -1,21 +1,26 @@
 # SOVRN
 
-SOVRN is a hosted AI website-building platform.
-
-Users access SOVRN through a hosted domain with account login and subscription-based access.
-
-In SOVRN documentation, offline means the core stack does not require paid third-party AI APIs for inference. The platform runs its own inference stack rather than depending on external per-request AI API billing.
+SOVRN is a production AI website platform with a hosted product surface and a self-managed inference stack.
 
 ## Canonical Documentation
 
 Use these files first:
 
-- [docs/SOVRN_OVERVIEW.md](docs/SOVRN_OVERVIEW.md)
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-- [docs/ROADMAP.md](docs/ROADMAP.md)
-- [docs/TODO.md](docs/TODO.md)
-- [docs/DECISIONS.md](docs/DECISIONS.md)
+- docs/SOVRN_OVERVIEW.md
+- docs/ARCHITECTURE.md
+- docs/ROADMAP.md
+- docs/ENGINEERING_BACKLOG.md
+- docs/DECISIONS.md
+- docs/Plan/PHASED_NEXTGEN_PRODUCTION_PLAN.md
 
-## Legacy Documentation Note
+## Security Baseline
 
-Some older documents in this repository are retained for historical traceability and may include deprecated planning or outdated status claims.
+- Never commit secrets, tokens, or database passwords.
+- Use local environment files or a managed secret store.
+- Database bootstrap order in API: DATABASE_URL, then SUPABASE_DB_URL.
+
+## Repository Hygiene
+
+- Active documentation lives under docs/.
+- Historical snapshots are preserved under docs/archive/rearrange-stage2-2026-04-18/.
+- Prefer ORCHESTRATION_* naming for runtime controls.
