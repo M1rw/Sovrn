@@ -1,32 +1,73 @@
-"""Generation service compatibility shim.
+"""Production generation service built on the active agent pipeline.
 
-This service is the canonical job processor bridge for website generation.
-It intentionally reuses the existing local website engines instead of returning
-stubbed outputs so the worker path produces real artifacts.
+This service is the canonical bridge for website generation. It uses the
+active strategist, designer, and engineer agents, while preserving the same
+output shape used by orchestration and worker flows.
 """
 
 from __future__ import annotations
 
 import asyncio
+from dataclasses import asdict
 import time
 from typing import Any
 
 from app.core.config import settings
-from app.lib.ai.advanced_mml import AdvancedMMLEngine
-from app.lib.ai.mml_engine import WebsiteStyle
+from app.agents.common import DesignSystem, GeneratedSite, SiteStrategy
+from app.agents.designer import designer_agent
+from app.agents.engineer import engineer_agent
+from app.agents.strategist import strategist_agent
 
 
-_advanced_engine: AdvancedMMLEngine | None = None
+_production_engine: "_ProductionWebsiteEngine | None" = None
 _starter_template_cache: dict[str, dict[str, Any]] = {}
 
+_SUPPORTED_STYLES = {"modern", "minimal", "bold", "elegant", "playful", "corporate", "dark", "light"}
 
-def _coerce_style(value: Any) -> WebsiteStyle:
-    try:
-        if isinstance(value, str):
-            return WebsiteStyle(value.lower())
-    except ValueError:
-        return WebsiteStyle.MODERN
-    return WebsiteStyle.MODERN
+
+def _normalize_style(value: Any) -> str:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in _SUPPORTED_STYLES:
+            return normalized
+    return "modern"
+
+
+def _project_name(project: Any) -> str:
+    name = getattr(project, "name", "") or ""
+    return name.strip() or "SOVRN Site"
+
+
+def _project_locale(project: Any, input_data: dict[str, Any]) -> str:
+    locale = input_data.get("locale") or getattr(project, "locale", "en") or "en"
+    return str(locale)
+
+
+def _project_industry(project: Any, input_data: dict[str, Any]) -> str | None:
+    industry = input_data.get("industry") or getattr(project, "industry", None)
+    return str(industry) if industry else None
+
+
+def _project_business_type(project: Any, input_data: dict[str, Any]) -> str | None:
+    business_type = input_data.get("business_type") or getattr(project, "business_type", None)
+    return str(business_type) if business_type else None
+
+
+def _project_target_audience(project: Any, input_data: dict[str, Any]) -> Any:
+    return input_data.get("target_audience") or getattr(project, "target_audience", None)
+
+
+def _project_goals(project: Any, input_data: dict[str, Any]) -> Any:
+    return input_data.get("goals") or getattr(project, "goals", None)
+
+
+def _project_brief(project: Any, input_data: dict[str, Any]) -> str:
+    brief = input_data.get("brief") or getattr(project, "brief", "") or "Build a website"
+    return str(brief)
+
+
+def _project_style(input_data: dict[str, Any]) -> str:
+    return _normalize_style(input_data.get("style") or input_data.get("design_style"))
 
 
 def _truncate_utf8_bytes(content: str, max_bytes: int) -> str:
@@ -108,6 +149,42 @@ button {{ margin: 0 auto; border: 0; border-radius: 0.75rem; padding: 0.8rem 1.1
     }
 
 
+class _ProductionWebsiteEngine:
+    """Agent-backed code generator used by the production generation service."""
+
+    async def generate(self, prompt: str, *, project_name: str, design_style: str) -> dict[str, Any]:
+        strategy = strategist_agent.analyze(
+            brief=prompt,
+            additional_context={
+                "brand_voice": "clear, confident, helpful",
+                "cta": "Get started",
+                "design_style": design_style,
+            },
+        )
+        design = await designer_agent.design(strategy)
+        site: GeneratedSite = await asyncio.to_thread(
+            engineer_agent.generate,
+            strategy,
+            design,
+            project_name,
+        )
+
+        files = {artifact.path: artifact.content for artifact in site.files}
+        preview_html = files.get("app/page.tsx") or next(iter(files.values()), "")
+
+        return {
+            "success": bool(files),
+            "files": files,
+            "preview_html": preview_html,
+            "design_style": design.style_theme,
+            "generation_time_ms": 0,
+            "strategy": asdict(strategy),
+            "design": asdict(design),
+            "dependencies": site.dependencies,
+            "tests": site.tests,
+        }
+
+
 class GenerationService:
     """Minimal generation pipeline facade used by API endpoints."""
 
@@ -115,23 +192,22 @@ class GenerationService:
         self.db = db
         self.inference_url = inference_url
 
-    async def _get_advanced_engine(self) -> AdvancedMMLEngine:
-        global _advanced_engine
+    async def _get_advanced_engine(self) -> _ProductionWebsiteEngine:
+        global _production_engine
 
-        if _advanced_engine is None:
-            _advanced_engine = AdvancedMMLEngine()
-            await _advanced_engine.load()
+        if _production_engine is None:
+            _production_engine = _ProductionWebsiteEngine()
 
-        return _advanced_engine
+        return _production_engine
 
     def _build_prompt(self, project: Any, input_data: dict[str, Any]) -> str:
-        brief = input_data.get("brief") or getattr(project, "brief", "") or "Build a website"
-        locale = input_data.get("locale") or getattr(project, "locale", "en")
-        industry = input_data.get("industry") or getattr(project, "industry", None)
-        business_type = input_data.get("business_type") or getattr(project, "business_type", None)
-        target_audience = input_data.get("target_audience") or getattr(project, "target_audience", None)
-        goals = input_data.get("goals") or getattr(project, "goals", None)
-        style = input_data.get("style") or input_data.get("design_style") or "modern"
+        brief = _project_brief(project, input_data)
+        locale = _project_locale(project, input_data)
+        industry = _project_industry(project, input_data)
+        business_type = _project_business_type(project, input_data)
+        target_audience = _project_target_audience(project, input_data)
+        goals = _project_goals(project, input_data)
+        style = _project_style(input_data)
 
         parts = [brief, f"Locale: {locale}", f"Style: {style}"]
         if industry:
@@ -145,28 +221,72 @@ class GenerationService:
 
         return "\n".join(str(part) for part in parts if part)
 
-    def _build_strategy_output(self, project: Any, input_data: dict[str, Any], prompt: str, design_style: str) -> dict[str, Any]:
-        brief = input_data.get("brief") or getattr(project, "brief", "") or ""
-        return {
-            "project_id": str(getattr(project, "id", "unknown")),
-            "brief": brief,
-            "locale": input_data.get("locale") or getattr(project, "locale", "en"),
-            "industry": input_data.get("industry") or getattr(project, "industry", None),
-            "business_type": input_data.get("business_type") or getattr(project, "business_type", None),
-            "target_audience": input_data.get("target_audience") or getattr(project, "target_audience", None),
-            "goals": input_data.get("goals") or getattr(project, "goals", None),
-            "prompt": prompt,
-            "design_style": design_style,
-            "status": "generated",
-        }
+    def _build_strategy_output(self, project: Any, input_data: dict[str, Any], prompt: str) -> dict[str, Any]:
+        strategy: SiteStrategy = strategist_agent.analyze(
+            brief=_project_brief(project, input_data),
+            locale=_project_locale(project, input_data),
+            industry=_project_industry(project, input_data),
+            additional_context={
+                "business_model": _project_business_type(project, input_data),
+                "target_audience": _project_target_audience(project, input_data),
+                "goals": _project_goals(project, input_data),
+                "brand_voice": input_data.get("brand_voice", "clear, confident, helpful"),
+                "cta": input_data.get("cta", "Get started"),
+                "design_style": _project_style(input_data),
+            },
+        )
 
-    def _build_design_output(self, input_data: dict[str, Any], design_style: str) -> dict[str, Any]:
-        return {
-            "style": design_style,
-            "responsive": True,
-            "locale": input_data.get("locale") or "en",
-            "status": "generated",
-        }
+        strategy_output = asdict(strategy)
+        strategy_output.update(
+            {
+                "project_id": str(getattr(project, "id", "unknown")),
+                "brief": _project_brief(project, input_data),
+                "locale": _project_locale(project, input_data),
+                "industry": _project_industry(project, input_data),
+                "business_type": _project_business_type(project, input_data),
+                "target_audience": _project_target_audience(project, input_data),
+                "goals": _project_goals(project, input_data),
+                "prompt": prompt,
+                "design_style": _project_style(input_data),
+                "status": "generated",
+            }
+        )
+        return strategy_output
+
+    async def _build_design_output(self, project: Any, input_data: dict[str, Any], prompt: str) -> dict[str, Any]:
+        strategy: SiteStrategy = strategist_agent.analyze(
+            brief=_project_brief(project, input_data),
+            locale=_project_locale(project, input_data),
+            industry=_project_industry(project, input_data),
+            additional_context={
+                "business_model": _project_business_type(project, input_data),
+                "target_audience": _project_target_audience(project, input_data),
+                "goals": _project_goals(project, input_data),
+                "brand_voice": input_data.get("brand_voice", "clear, confident, helpful"),
+                "cta": input_data.get("cta", "Get started"),
+                "design_style": _project_style(input_data),
+            },
+        )
+        design: DesignSystem = await designer_agent.design(
+            strategy,
+            locale=_project_locale(project, input_data),
+            country_code=str(input_data.get("country_code", "US")),
+            brand_guidelines=input_data.get("brand_guidelines"),
+        )
+
+        design_output = asdict(design)
+        design_output.update(
+            {
+                "project_id": str(getattr(project, "id", "unknown")),
+                "prompt": prompt,
+                "style": design.style_theme,
+                "design_style": design.style_theme,
+                "locale": _project_locale(project, input_data),
+                "responsive": True,
+                "status": "generated",
+            }
+        )
+        return design_output
 
     def _apply_preview_file_budgets(self, raw_files: Any) -> tuple[dict[str, str], dict[str, int]]:
         if not isinstance(raw_files, dict):
@@ -224,7 +344,7 @@ class GenerationService:
         }
 
     def _get_cached_starter_template(self, style_value: Any) -> dict[str, Any]:
-        style = _coerce_style(style_value).value
+        style = _normalize_style(style_value)
         cached = _starter_template_cache.get(style)
         if cached is not None:
             return cached
@@ -235,31 +355,25 @@ class GenerationService:
 
     async def generate_strategy(self, project: Any, input_data: dict[str, Any]) -> dict[str, Any]:
         prompt = self._build_prompt(project, input_data)
-        advanced = await self._get_advanced_engine()
-
-        analysis = advanced._analyze_prompt(prompt) if hasattr(advanced, "_analyze_prompt") else None
-        design_style = analysis.style if analysis else _coerce_style(input_data.get("style")).value
-
-        return self._build_strategy_output(project, input_data, prompt, design_style)
+        return self._build_strategy_output(project, input_data, prompt)
 
     async def generate_design(self, project: Any, input_data: dict[str, Any]) -> dict[str, Any]:
         prompt = self._build_prompt(project, input_data)
-        advanced = await self._get_advanced_engine()
-
-        analysis = advanced._analyze_prompt(prompt) if hasattr(advanced, "_analyze_prompt") else None
-        design_style = analysis.style if analysis else _coerce_style(input_data.get("style")).value
-
-        return self._build_design_output(input_data, design_style)
+        return await self._build_design_output(project, input_data, prompt)
 
     async def generate_code(self, project: Any, input_data: dict[str, Any]) -> dict[str, Any]:
         start_time = time.time()
         prompt = self._build_prompt(project, input_data)
-        requested_style = input_data.get("style") or input_data.get("design_style") or "modern"
+        requested_style = _project_style(input_data)
         advanced = await self._get_advanced_engine()
 
         try:
             result = await asyncio.wait_for(
-                advanced.generate(prompt),
+                advanced.generate(
+                    prompt,
+                    project_name=_project_name(project),
+                    design_style=requested_style,
+                ),
                 timeout=settings.PREVIEW_BUILD_TIMEOUT_SECONDS,
             )
         except asyncio.TimeoutError:
@@ -275,7 +389,7 @@ class GenerationService:
                 "brief": input_data.get("brief", ""),
                 "files": files,
                 "preview_html": preview_html,
-                "design_style": template.get("design_style", _coerce_style(requested_style).value),
+                "design_style": template.get("design_style", _normalize_style(requested_style)),
                 "status": "completed_fallback",
                 "error": f"Preview build timed out after {settings.PREVIEW_BUILD_TIMEOUT_SECONDS}s",
                 "fallback_reason": "timeout",
@@ -309,7 +423,7 @@ class GenerationService:
                 template.get("preview_html", ""),
                 settings.PREVIEW_BUILD_MAX_TOTAL_BYTES,
             )
-            design_style = template.get("design_style", _coerce_style(requested_style).value)
+            design_style = template.get("design_style", _normalize_style(requested_style))
             fallback_reason = "generation_failed"
             status_value = "completed_fallback"
         else:
