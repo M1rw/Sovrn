@@ -43,6 +43,14 @@ LEGACY_CHAT_DEPRECATION_RESPONSE = {
 DATA_DIR = Path("/workspaces/Sovrn/data")
 PROJECTS_FILE = DATA_DIR / "projects.json"
 
+
+def _parse_cors_origins(raw_value: Optional[str]) -> List[str]:
+    if not raw_value:
+        return ["http://localhost:3000", "http://localhost:8000"]
+
+    parsed = [origin.strip() for origin in raw_value.split(",") if origin.strip()]
+    return parsed or ["http://localhost:3000", "http://localhost:8000"]
+
 def ensure_storage():
     """Initialize file storage."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -53,14 +61,14 @@ def load_projects() -> List[Dict]:
     """Load projects from file."""
     ensure_storage()
     try:
-        return json.loads(PROJECTS_FILE.read_text())
-    except:
+        return json.loads(PROJECTS_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
         return []
 
 def save_projects(projects: List[Dict]):
     """Save projects to file."""
     ensure_storage()
-    PROJECTS_FILE.write_text(json.dumps(projects, indent=2, default=str))
+    PROJECTS_FILE.write_text(json.dumps(projects, indent=2, default=str), encoding="utf-8")
 
 
 # =============================================================================
@@ -125,10 +133,15 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+_cors_origins = _parse_cors_origins(
+    os.getenv("MML_API_CORS_ORIGINS") or os.getenv("CORS_ORIGINS")
+)
+_allow_credentials = "*" not in _cors_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )

@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 import structlog
 
 from worker.config import settings
+from worker.db_models import Job
 from worker.processor import JobProcessor
 
 
@@ -173,35 +174,6 @@ class Worker:
             processor=processor_stats,
             poll_interval_seconds=settings.POLL_INTERVAL,
         )
-
-
-# Import Job model for the query
-from sqlalchemy import Column, String, Integer, DateTime, Enum as SQLEnum, Text
-from sqlalchemy.dialects.postgresql import UUID as PGUUID, JSONB
-from sqlalchemy.orm import DeclarativeBase
-
-
-class Base(DeclarativeBase):
-    pass
-
-
-class Job(Base):
-    """Minimal Job model for worker."""
-    __tablename__ = "jobs"
-    
-    id = Column(PGUUID(as_uuid=True), primary_key=True)
-    project_id = Column(PGUUID(as_uuid=True), nullable=False)
-    type = Column(SQLEnum('strategy', 'design', 'engineer', 'full', name='job_type'), nullable=False)
-    status = Column(SQLEnum('queued', 'processing', 'completed', 'failed', 'cancelled', name='job_status'), nullable=False)
-    spark_cost = Column(Integer, default=1)
-    priority = Column(Integer, default=0)
-    input = Column(JSONB, default={})
-    output = Column(JSONB, default={})
-    error = Column(Text)
-    started_at = Column(DateTime(timezone=True))
-    completed_at = Column(DateTime(timezone=True))
-    created_at = Column(DateTime(timezone=True))
-    worker_id = Column(String(100))
 
 
 def main():

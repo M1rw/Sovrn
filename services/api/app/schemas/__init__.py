@@ -223,7 +223,7 @@ class ProjectResponse(ProjectBase, TimestampMixin, BaseSchema):
 
 class ProjectWithGenerations(ProjectResponse):
     """Project with generation history."""
-    generations: list["SiteGenerationResponse"] = []
+    generations: list["SiteGenerationResponse"] = Field(default_factory=list)
 
 
 # =============================================================================

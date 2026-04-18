@@ -16,11 +16,23 @@ import uuid
 
 app = FastAPI(title="SOVRN AI API", version="1.0.0")
 
+
+def _parse_cors_origins(raw_value: Optional[str]) -> List[str]:
+    if not raw_value:
+        return ["http://localhost:3000", "http://localhost:8000"]
+
+    parsed = [origin.strip() for origin in raw_value.split(",") if origin.strip()]
+    return parsed or ["http://localhost:3000", "http://localhost:8000"]
+
+
+_cors_origins = _parse_cors_origins(os.getenv("SIMPLE_API_CORS_ORIGINS") or os.getenv("CORS_ORIGINS"))
+_allow_credentials = "*" not in _cors_origins
+
 # CORS - allow all for development
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -109,11 +121,14 @@ class User(BaseModel):
 
 def load_json(path: Path) -> Dict:
     if path.exists():
-        return json.loads(path.read_text())
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
     return {}
 
 def save_json(path: Path, data: Dict):
-    path.write_text(json.dumps(data, indent=2))
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 # ============================================================================
 # Startup
