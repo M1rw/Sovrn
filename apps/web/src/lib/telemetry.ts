@@ -11,6 +11,10 @@ interface ClientMetricEvent {
 
 const CLIENT_SESSION_STORAGE_KEY = 'sovrn.client_session_id';
 const METRIC_EVENT_NAME = 'sovrn:metric';
+const DEFAULT_INGEST_ENDPOINT = '/api/v1/telemetry/client-metrics';
+const METRIC_INGEST_ENDPOINT =
+  process.env.NEXT_PUBLIC_TELEMETRY_INGEST_ENDPOINT?.trim() || DEFAULT_INGEST_ENDPOINT;
+const METRIC_INGEST_ENABLED = process.env.NEXT_PUBLIC_TELEMETRY_INGEST_ENABLED !== 'false';
 
 function generateId(): string {
   if (typeof globalThis.crypto !== 'undefined' && typeof globalThis.crypto.randomUUID === 'function') {
@@ -63,6 +67,35 @@ export function recordClientMetric(name: string, value: number, tags?: MetricTag
     // Kept lightweight for local diagnostics until backend ingestion endpoint is enabled.
     console.debug('client_metric', event);
   }
+
+  queueMetricIngest(event);
+}
+
+function queueMetricIngest(event: ClientMetricEvent): void {
+  if (typeof window === 'undefined' || !METRIC_INGEST_ENABLED) {
+    return;
+  }
+
+  const payload = JSON.stringify(event);
+
+  if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
+    try {
+      const blob = new Blob([payload], { type: 'application/json' });
+      if (navigator.sendBeacon(METRIC_INGEST_ENDPOINT, blob)) {
+        return;
+      }
+    } catch {
+      // Continue to fetch fallback for browsers without Blob/sendBeacon support.
+    }
+  }
+
+  void fetch(METRIC_INGEST_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: payload,
+    keepalive: true,
+    credentials: 'same-origin',
+  }).catch(() => undefined);
 }
 
 export function recordRequestMetric(

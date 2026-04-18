@@ -1,0 +1,92 @@
+{
+  "timestamp": "2026-04-17T22:15:52.642051+00:00",
+  "benchmark": "phase2_preview_latency",
+  "target": {
+    "p95_total_ms_max": 1500.0
+  },
+  "config": {
+    "base_url": "http://127.0.0.1:8000",
+    "project_id": "mock-project",
+    "generation_id": "fdd765dc-a356-4f3d-8ad9-3c7a8bafc19e",
+    "entrypoint": "index.html",
+    "iterations": 5,
+    "warmup": 1,
+    "poll_interval_ms": 250,
+    "stream_timeout_ms": 6000,
+    "request_timeout_ms": 15000
+  },
+  "summary": {
+    "count": 5,
+    "successful": 5,
+    "failed": 0,
+    "success_rate": 1.0,
+    "p50_total_ms": 5.05909999992582,
+    "p95_total_ms": 6.571680002525682,
+    "p99_total_ms": 6.795296003256226,
+    "p95_stream_first_update_ms": 2.935279999655904,
+    "mean_total_ms": 5.2196600001479965
+  },
+  "passed": true,
+  "results": [
+    {
+      "iteration": 1,
+      "success": true,
+      "session_ms": 1.4661000022897497,
+      "verify_ms": 1.3577000026998576,
+      "artifact_ms": 1.254399998288136,
+      "stream_first_update_ms": 1.3715999994019512,
+      "total_ms": 5.45359999887296,
+      "generation_id": "fdd765dc-a356-4f3d-8ad9-3c7a8bafc19e",
+      "generation_version": 1,
+      "error": ""
+    },
+    {
+      "iteration": 2,
+      "success": true,
+      "session_ms": 1.2224999991303775,
+      "verify_ms": 1.184500000817934,
+      "artifact_ms": 1.113700000132667,
+      "stream_first_update_ms": 3.3261999997193925,
+      "total_ms": 6.851200003438862,
+      "generation_id": "fdd765dc-a356-4f3d-8ad9-3c7a8bafc19e",
+      "generation_version": 1,
+      "error": ""
+    },
+    {
+      "iteration": 3,
+      "success": true,
+      "session_ms": 1.645300002564909,
+      "verify_ms": 1.0369999981776346,
+      "artifact_ms": 1.1565000022528693,
+      "stream_first_update_ms": 1.2154999967606273,
+      "total_ms": 5.05909999992582,
+      "generation_id": "fdd765dc-a356-4f3d-8ad9-3c7a8bafc19e",
+      "generation_version": 1,
+      "error": ""
+    },
+    {
+      "iteration": 4,
+      "success": true,
+      "session_ms": 1.05009999970207,
+      "verify_ms": 0.9057999996002764,
+      "artifact_ms": 0.8613000027253293,
+      "stream_first_update_ms": 1.1159999994561076,
+      "total_ms": 3.9368999969155993,
+      "generation_id": "fdd765dc-a356-4f3d-8ad9-3c7a8bafc19e",
+      "generation_version": 1,
+      "error": ""
+    },
+    {
+      "iteration": 5,
+      "success": true,
+      "session_ms": 1.1661999997159,
+      "verify_ms": 1.0409999995317776,
+      "artifact_ms": 1.4181000005919486,
+      "stream_first_update_ms": 1.168100003269501,
+      "total_ms": 4.797500001586741,
+      "generation_id": "fdd765dc-a356-4f3d-8ad9-3c7a8bafc19e",
+      "generation_version": 1,
+      "error": ""
+    }
+  ]
+}

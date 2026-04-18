@@ -246,7 +246,14 @@ Goal: Deliver interactive browser-native runtime with fast visual feedback.
 - [x] Runtime verification for expanded Phase 2 backend suite: py -3.11 -m pytest tests/test_phase2_preview_bootstrap.py tests/test_generation_service_preview_budget.py (18 passed)
 - [x] Runtime verification for expanded Phase 2 frontend preview suites: npx jest src/app/builder/preview-lifecycle.test.ts src/lib/api.preview-stream.test.ts src/hooks/use-preview-runtime.test.ts (3 suites, 12 tests passed)
 - [x] Validated local mock latency harness with real benchmark implementation and runner script (no placeholder benchmark substitution); report: eval/load/phase2_preview_latency_report.local_mock.json (5/5 successful, p95 total 31.78 ms, non-gating sanity evidence)
+- [x] Hardened eval/load/run-preview-latency.ps1 for bracketed clone paths by switching Resolve-Path, Push-Location, Test-Path, and Get-Content calls to -LiteralPath.
+- [x] Revalidated local mock latency benchmark after literal-path hardening; report: eval/load/phase2_preview_latency_report.local_mock.json (5/5 successful, p95 total 6.57 ms, p95 stream first update 2.94 ms, non-gating sanity evidence)
 - [x] Validated Phase 2 rollback drill path with runtime fallback flag disabled (`NEXT_PUBLIC_BUILDER_WEBCONTAINER_ENABLED=false`) and reran preview lifecycle/endpoint suites: frontend (3 suites, 12 tests passed), backend (tests/test_phase2_preview_bootstrap.py: 15 passed)
+- [x] Added client telemetry ingestion path for preview canary metrics: browser metric transport (`sendBeacon`/`fetch keepalive`) plus web telemetry snapshot endpoint at `GET /api/v1/telemetry/client-metrics`
+- [x] Added telemetry aggregation coverage, transport coverage, and route coverage: `src/lib/server/client-metrics-aggregate.test.ts`, `src/lib/telemetry.test.ts`, `src/app/api/v1/telemetry/client-metrics/route.test.ts`
+- [x] Added canary monitoring check runner: `eval/load/check-preview-canary-metrics.ps1` for staged gate verification of preview render p95 and stream/restart counters
+- [x] Runtime verification for expanded frontend + telemetry suites: `npx jest src/app/api/v1/telemetry/client-metrics/route.test.ts src/lib/server/client-metrics-aggregate.test.ts src/lib/telemetry.test.ts src/app/builder/preview-lifecycle.test.ts src/lib/api.preview-stream.test.ts src/hooks/use-preview-runtime.test.ts` (6 suites, 20 tests passed)
+- [x] Runtime verification for web type safety after telemetry additions: `npm run typecheck` (pass)
 
 ### Frontend
 
@@ -272,12 +279,17 @@ Goal: Deliver interactive browser-native runtime with fast visual feedback.
 - [x] Security test: iframe isolation and message validation
 - [x] Backend endpoint-level contract tests: preview-artifact, preview-session, preview-session/verify
 - [ ] p95 edit-to-preview latency <= 1.5s in staging
+- Latest staging gate attempt (2026-04-17): blocked in `E:\Synthos\[Sovrn]` shell because `SOVRN_BASE_URL`, `SOVRN_TOKEN`, and `SOVRN_PROJECT_ID` were missing.
+- Latest prereq command output: `eval/load/check-preview-latency-prereqs.ps1` returned `BLOCKED` with localhost health probes unreachable.
+- Localhost full-stack reattempt status (2026-04-17): blocked because Docker CLI is unavailable on host and WSL has no installed distributions, so Compose-based local services cannot be started.
 
 ### Phase 2 Release Controls (In Progress)
 
 - [x] Feature flag rollout plan documented for preview runtime enablement and fallback behavior
 - [x] Rollback playbook validated for preview endpoints and builder runtime fallback
 - [ ] Canary monitoring checks confirmed in staging for preview latency and preview stream disconnect/reconnect rates
+- Latest canary check attempt (2026-04-17): blocked because `SOVRN_WEB_BASE_URL` was not set in staging shell context, so `eval/load/check-preview-canary-metrics.ps1` could not be executed against staging telemetry.
+- Localhost canary verification dependency status (2026-04-17): telemetry endpoint checks require running web stack on localhost or reachable staging web URL; localhost web stack is currently unavailable due missing Docker runtime.
 
 #### Rollout Plan
 
@@ -299,6 +311,12 @@ Goal: Deliver interactive browser-native runtime with fast visual feedback.
 2. Stream health metrics: monitor `builder_preview_stream_update_count` and `builder_preview_stream_reconnect_count` for regressions.
 3. Runtime restart pressure: monitor `builder_preview_runtime_restart_count` for unexpected growth after rollout increments.
 4. Gate to advance rings: no sustained disconnect/error fallback banner rates in builder preview panel.
+
+Validation command (staging web telemetry endpoint):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File eval/load/check-preview-canary-metrics.ps1 -WebBaseUrl 'https://<staging-web-host>'
+```
 
 ### Local URLs for Try/Test (Until Domain Purchase)
 
@@ -528,7 +546,7 @@ Goal: Release safely with measurable risk control.
 
 - [ ] Run `eval/load/run-preview-latency.ps1` (or `eval/load/preview_latency_benchmark.py`) in staging and validate `summary.p95_total_ms <= 1500` in `eval/load/phase2_preview_latency_report.json`
 - [ ] Provide staging `SOVRN_BASE_URL`, `SOVRN_TOKEN`, and `SOVRN_PROJECT_ID` in shell environment (or CI secret context) before executing the staging benchmark gate
-- [ ] Confirm canary monitoring checks in staging after rollout ring activation (`builder_preview_render_ms`, `builder_preview_stream_update_count`, `builder_preview_stream_reconnect_count`, `builder_preview_runtime_restart_count`)
+- [ ] Run `eval/load/check-preview-canary-metrics.ps1` against staging web telemetry endpoint after rollout ring activation and archive result output in release evidence
 
 ## Notes
 
