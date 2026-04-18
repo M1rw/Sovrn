@@ -42,7 +42,6 @@
         "./src/styles/*"
       ]
     },
-    "baseUrl": ".",
     "target": "ES2017"
   },
   "include": [

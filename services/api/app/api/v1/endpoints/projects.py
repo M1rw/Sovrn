@@ -37,11 +37,16 @@ from app.schemas import (
     PreviewSessionResponse,
     PreviewSessionVerifyRequest,
     PreviewSessionVerifyResponse,
+    PatchContractRequest,
+    PatchContractApplyRequest,
+    PatchContractApplyResponse,
+    PatchContractValidationResponse,
     PaginatedResponse,
     MessageResponse,
 )
 from app.api.v1.deps import bearer_scheme, get_current_user, get_current_user_optional, require_sparks
 from app.services.generation import GenerationService
+from app.services.patch_contract import resolve_patch_contract_files
 
 
 router = APIRouter()
@@ -639,6 +644,76 @@ async def verify_preview_session(
         entrypoint=resolved_entrypoint,
         expires_at=expires_at,
         artifact_endpoint=artifact_endpoint,
+    )
+
+
+@router.post("/{project_id}/patch-contract/validate", response_model=PatchContractValidationResponse)
+async def validate_patch_contract(
+    project_id: UUID,
+    request: PatchContractRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Validate Phase 3 deterministic patch contract payloads before apply."""
+    await _get_project_for_user(project_id=project_id, user_id=user.id, db=db)
+
+    if request.project_id and request.project_id != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Patch contract project_id does not match request path",
+        )
+
+    files_touched = sorted({operation.path for operation in request.operations})
+
+    return PatchContractValidationResponse(
+        valid=True,
+        project_id=project_id,
+        generation_id=request.generation_id,
+        version=request.version,
+        operation_count=len(request.operations),
+        files_touched=files_touched,
+        fallback_mode=request.fallback_mode,
+    )
+
+
+@router.post("/{project_id}/patch-contract/resolve", response_model=PatchContractApplyResponse)
+async def resolve_patch_contract(
+    project_id: UUID,
+    request: PatchContractApplyRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Resolve patch-contract operations with conflict and rollback handling."""
+    await _get_project_for_user(project_id=project_id, user_id=user.id, db=db)
+
+    if request.contract.project_id and request.contract.project_id != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Patch contract project_id does not match request path",
+        )
+
+    resolution = resolve_patch_contract_files(request.files, request.contract)
+
+    return PatchContractApplyResponse(
+        applied=resolution.applied,
+        rolled_back=resolution.rolled_back,
+        applied_operations=resolution.applied_operations,
+        fallback_mode=request.contract.fallback_mode,
+        files=resolution.files,
+        conflicts=[
+            {
+                "operation_index": conflict.operation_index,
+                "path": conflict.path,
+                "op": conflict.op,
+                "code": conflict.code,
+                "message": conflict.message,
+                "fallback_applied": conflict.fallback_applied,
+            }
+            for conflict in resolution.conflicts
+        ],
+        project_id=project_id,
+        generation_id=request.contract.generation_id,
+        version=request.contract.version,
     )
 
 

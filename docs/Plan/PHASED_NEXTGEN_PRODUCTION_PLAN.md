@@ -38,7 +38,7 @@ From the current roadmap:
 - [ ] Phase 0: Program setup, baselines, and SLO instrumentation
 - [x] Phase 1: Complete current execution-track gaps (P4/P5)
 - [ ] Phase 2: WebContainer runtime and instant preview path
-- [ ] Phase 3: AST patch engine and safe code apply pipeline
+- [x] Phase 3: AST patch engine and safe code apply pipeline
 - [ ] Phase 4: Multi-agent orchestration with self-healing loops
 - [ ] Phase 5: Full-stack generation (DB to API to UI)
 - [ ] Phase 6: CRDT collaboration and multiplayer editing
@@ -359,28 +359,61 @@ For the Phase 2 latency benchmark in local/dev mode, use `SOVRN_BASE_URL=http://
 
 Goal: Move from full-file overwrite to deterministic patching.
 
+### Phase 3 Execution Log (2026-04-18)
+
+- [x] Added Phase 3 patch contract schemas with strict validation rules for operation shape, duplicate targets, and path traversal rejection (`PatchContractRequest`, `PatchOperation`, `PatchTextRange`) in `services/api/app/schemas/__init__.py`
+- [x] Added endpoint-level patch contract validation route: `POST /api/v1/projects/{project_id}/patch-contract/validate` with project ownership + request `project_id` consistency guard
+- [x] Added backend validation suite for patch-contract schema and route behavior in `services/api/tests/test_phase3_patch_contract.py`
+- [x] Runtime verification in local clone: `C:/Users/dimar/AppData/Local/Microsoft/WindowsApps/python3.13.exe -m pytest tests/test_phase3_patch_contract.py -q` (7 passed)
+- [x] Wired builder apply-patch flow to call patch-contract validation endpoint before runtime remount when project session + auth are available (`apps/web/src/app/builder/page.tsx`)
+- [x] Added frontend helper module for deterministic patch-contract request shaping from editor drafts (`apps/web/src/app/builder/patch-contract.ts`)
+- [x] Added frontend helper and API contract coverage for patch-contract validation (`apps/web/src/app/builder/patch-contract.test.ts`, `apps/web/src/lib/api.preview-stream.test.ts`)
+- [x] Added backend patch conflict resolver service with rollback semantics and safe-rewrite fallback handling for missing file / invalid range conflicts (`services/api/app/services/patch_contract.py`)
+- [x] Added endpoint-level patch resolution route: `POST /api/v1/projects/{project_id}/patch-contract/resolve` with project ownership + request `project_id` consistency guard
+- [x] Added backend resolver coverage tests for direct service behavior and endpoint resolution/mismatch flows (`services/api/tests/test_patch_contract_resolver.py`)
+- [x] Added deterministic formatter pass in patch resolver for TS/JS/JSON/CSS touched files (JSON canonical pretty sort + newline normalization fallback; text normalization for TS/JS/CSS) in `services/api/app/services/patch_contract.py`
+- [x] Added formatter coverage tests for JSON deterministic output and CSS whitespace/newline normalization in `services/api/tests/test_patch_contract_resolver.py`
+- [x] Added AST-aware range transform validation pipeline in resolver for TS/JS/JSON/CSS profiles (JSON AST parse via `json.loads`; structural AST delimiter/comment/string parser for TS/JS/CSS) with rollback/safe-rewrite handling on invalid transformed syntax in `services/api/app/services/patch_contract.py`
+- [x] Added AST pipeline coverage tests for reject/fallback behavior on invalid JSON and unbalanced JS range transforms in `services/api/tests/test_patch_contract_resolver.py`
+- [x] Added golden resolver coverage for deterministic output snapshots and idempotent re-apply behavior in `services/api/tests/test_patch_contract_resolver.py`
+- [x] Added representative generated-project regression suite (marketing landing, SaaS dashboard, ecommerce catalog fixtures) for patch resolver behavior across HTML/TSX/JSX/CSS/JSON in `services/api/tests/test_patch_contract_resolver.py`
+- [x] Runtime verification in local clone: `python -m pytest tests/test_patch_contract_resolver.py tests/test_phase3_patch_contract.py -q` (23 passed)
+- [x] Added frontend node-level selection mapping helpers to parse preview node click payloads and resolve source-file/line targets with deterministic scoring in `apps/web/src/app/builder/node-selection.ts`
+- [x] Extended preview iframe bridge script to emit secure node selection events (`sovrn.preview.node.select`) with tag/id/class/text/source metadata in `apps/web/src/hooks/use-preview-runtime.ts`
+- [x] Wired builder preview message handling to map selected preview nodes back to code view file selection, auto-switch to code mode, and surface selection feedback in `apps/web/src/app/builder/page.tsx`
+- [x] Added frontend coverage for node selection mapping heuristics and bridge script event contract in `apps/web/src/app/builder/node-selection.test.ts` and `apps/web/src/hooks/use-preview-runtime.test.ts`
+- [x] Runtime verification in local clone: `npm run test -w apps/web -- src/app/builder/node-selection.test.ts src/hooks/use-preview-runtime.test.ts src/app/builder/preview-lifecycle.test.ts` (3 suites, 12 tests passed)
+- [x] Runtime verification in local clone: `npm run typecheck -w apps/web` (pass)
+- [x] Updated revision action gating to require valid `revision_request.patch_contract` payloads validated against `PatchContractRequest` before allowing `propose_revision` in `services/api/app/api/v1/endpoints/ai.py`
+- [x] Updated canonical AI prompt modules to require patch-contract-only revision outputs and prohibit raw overwrite blobs (`services/api/app/lib/ai/prompts/modules/revision_rules.v1.md`, `services/api/app/lib/ai/prompts/modules/output_contract.v1.md`) and refreshed registry checksums in `services/api/app/lib/ai/prompts/registry.json`
+- [x] Updated builder chat system prompt contract to explicitly require `revision_request.patch_contract` operation payloads for revision proposals in `apps/web/src/app/builder/page.tsx`
+- [x] Added resolved-action coverage for patch-contract-gated revision outcomes in `services/api/tests/test_resolved_action_contract.py` and `services/api/tests/test_resolved_action_e2e.py`
+- [x] Added unsupported declared-language range fallback handling to safe rewrite path in `services/api/app/services/patch_contract.py` with reject/safe-rewrite coverage in `services/api/tests/test_patch_contract_resolver.py`
+- [x] Runtime verification in local clone: `python -m pytest tests/test_patch_contract_resolver.py tests/test_resolved_action_contract.py tests/test_resolved_action_e2e.py tests/test_prompt_registry_loader.py -q` (34 passed)
+- [x] Runtime verification in local clone: `npm run test -w apps/web -- src/app/builder/node-selection.test.ts src/hooks/use-preview-runtime.test.ts src/app/builder/preview-lifecycle.test.ts` (5 suites, 18 tests passed) and `npm run typecheck -w apps/web` (pass)
+
 ### Frontend
 
-- [ ] Add node-level selection UX (click element -> map to source)
-- [ ] Add patch preview with accept/reject controls
+- [x] Add node-level selection UX (click element -> map to source)
+- [x] Add patch preview with accept/reject controls
 
 ### Backend
 
-- [ ] Build AST parser + transformer pipeline for TS/JS/JSON/CSS
-- [ ] Add patch contract schema and strict validation
-- [ ] Add patch conflict resolver and rollback support
-- [ ] Add deterministic formatter pass after patch apply
+- [x] Build AST parser + transformer pipeline for TS/JS/JSON/CSS
+- [x] Add patch contract schema and strict validation
+- [x] Add patch conflict resolver and rollback support
+- [x] Add deterministic formatter pass after patch apply
 
 ### Inference and Infra
 
-- [ ] Train prompts to output patch contract only (no raw overwrite)
-- [ ] Add fallback to safe file rewrite for unsupported syntax edge cases
+- [x] Train prompts to output patch contract only (no raw overwrite)
+- [x] Add fallback to safe file rewrite for unsupported syntax edge cases
 
 ### Test and Exit Gates
 
-- [ ] Golden tests for patch determinism and idempotence
-- [ ] Regression suite on representative generated projects
-- [ ] Patch conflict simulation tests pass
+- [x] Golden tests for patch determinism and idempotence
+- [x] Regression suite on representative generated projects
+- [x] Patch conflict simulation tests pass
 
 ## Phase 4: Multi-Agent Orchestration and Self-Healing
 

@@ -131,4 +131,54 @@ describe('preview bootstrap API contracts', () => {
     const headers = options.headers as Record<string, string>;
     expect(headers.Authorization).toBe('Bearer access-token-xyz');
   });
+
+  it('validatePatchContract posts patch contract payload with auth', async () => {
+    const mockFetch = installFetchResponse({
+      valid: true,
+      project_id: 'project-123',
+      generation_id: 'gen-456',
+      version: '1.0',
+      operation_count: 1,
+      files_touched: ['src/app/page.tsx'],
+      fallback_mode: 'safe_rewrite',
+    });
+
+    await projectsApi.validatePatchContract('access-token-xyz', 'project-123', {
+      version: '1.0',
+      project_id: 'project-123',
+      generation_id: 'gen-456',
+      fallback_mode: 'safe_rewrite',
+      operations: [
+        {
+          op: 'replace_file',
+          path: 'src/app/page.tsx',
+          language: 'tsx',
+          content: 'export default function Page() { return <main />; }\n',
+        },
+      ],
+    });
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url, options] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('http://127.0.0.1:8000/api/v1/projects/project-123/patch-contract/validate');
+    expect(options.method).toBe('POST');
+
+    const headers = options.headers as Record<string, string>;
+    expect(headers.Authorization).toBe('Bearer access-token-xyz');
+
+    expect(JSON.parse(String(options.body))).toEqual({
+      version: '1.0',
+      project_id: 'project-123',
+      generation_id: 'gen-456',
+      fallback_mode: 'safe_rewrite',
+      operations: [
+        {
+          op: 'replace_file',
+          path: 'src/app/page.tsx',
+          language: 'tsx',
+          content: 'export default function Page() { return <main />; }\n',
+        },
+      ],
+    });
+  });
 });

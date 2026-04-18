@@ -183,6 +183,17 @@ export const projectsApi = {
       body: JSON.stringify(data),
       token,
     }),
+
+  validatePatchContract: (
+    token: string,
+    id: string,
+    data: PatchContractRequestData
+  ) =>
+    fetchApi<PatchContractValidationResponse>(`/api/v1/projects/${id}/patch-contract/validate`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+      token,
+    }),
 };
 
 // Jobs
@@ -364,6 +375,43 @@ export interface PreviewSessionVerifyResponse {
   entrypoint: string;
   expires_at: string;
   artifact_endpoint: string;
+}
+
+export type PatchContractVersion = '1.0';
+export type PatchContractFallbackMode = 'safe_rewrite' | 'reject';
+export type PatchContractLanguage = 'ts' | 'tsx' | 'js' | 'jsx' | 'json' | 'css' | 'html';
+export type PatchContractOperationType = 'replace_file' | 'replace_range';
+
+export interface PatchContractRange {
+  start: number;
+  end: number;
+}
+
+export interface PatchContractOperationData {
+  op: PatchContractOperationType;
+  path: string;
+  language?: PatchContractLanguage;
+  expected_sha256?: string;
+  range?: PatchContractRange;
+  content: string;
+}
+
+export interface PatchContractRequestData {
+  version: PatchContractVersion;
+  project_id?: string;
+  generation_id?: string;
+  fallback_mode?: PatchContractFallbackMode;
+  operations: PatchContractOperationData[];
+}
+
+export interface PatchContractValidationResponse {
+  valid: boolean;
+  project_id: string;
+  generation_id?: string;
+  version: string;
+  operation_count: number;
+  files_touched: string[];
+  fallback_mode: PatchContractFallbackMode;
 }
 
 export interface Job {

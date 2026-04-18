@@ -14,7 +14,7 @@ from typing import Optional, Dict, Any, List
 from uuid import UUID
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from fastapi.responses import StreamingResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 import structlog
 
 from app.core.config import settings
@@ -28,6 +28,7 @@ from app.lib.ai.conversation_summary import (
     should_trigger_conversation_summary,
 )
 from app.lib.ai.structured_output import StructuredModelOutput, parse_structured_model_output
+from app.schemas import PatchContractRequest
 from app.services.conversation_repository import (
     ConversationRepository,
     ConversationRepositoryError,
@@ -340,6 +341,18 @@ def _resolve_shadow_action(request: ChatRequest, proposal: StructuredModelOutput
     proposed_action = proposal.action
     lowered_user = _latest_user_message(request).lower()
 
+    def _has_valid_revision_patch_contract(payload: dict[str, Any]) -> bool:
+        patch_contract = payload.get("patch_contract")
+        if not isinstance(patch_contract, dict):
+            return False
+
+        try:
+            PatchContractRequest.model_validate(patch_contract)
+        except ValidationError:
+            return False
+
+        return True
+
     if proposed_action == "ready_to_generate":
         has_site_intent = any(keyword in lowered_user for keyword in ("website", "landing", "portfolio", "shop", "app"))
         generation_payload = proposal.generation_request if isinstance(proposal.generation_request, dict) else {}
@@ -352,7 +365,8 @@ def _resolve_shadow_action(request: ChatRequest, proposal: StructuredModelOutput
         has_revision_intent = any(keyword in lowered_user for keyword in ("revise", "revision", "change", "update", "edit"))
         revision_payload = proposal.revision_request if isinstance(proposal.revision_request, dict) else {}
         has_revision_scope = bool(revision_payload.get("change_summary") or revision_payload.get("targets"))
-        if has_revision_intent and has_revision_scope:
+        has_patch_contract = _has_valid_revision_patch_contract(revision_payload)
+        if has_revision_intent and has_revision_scope and has_patch_contract:
             return "propose_revision", "revision_gate_passed"
         return "ask_clarification", "revision_gate_failed"
 
