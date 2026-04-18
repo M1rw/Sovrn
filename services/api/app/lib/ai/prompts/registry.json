@@ -35,7 +35,7 @@
       "file": "modules/revision_rules.v1.md",
       "order": 40,
       "required": false,
-      "checksum_sha256": "adb0b9aaaf389fecc29d00a46a072ea0c36c75d8df69b73c94fa6ca9eab48ec0"
+      "checksum_sha256": "896ff046b5135878ee4cd50a82a57b2548c869a98539dc16184365caebe61dd7"
     },
     {
       "id": "output_contract",
@@ -43,7 +43,7 @@
       "file": "modules/output_contract.v1.md",
       "order": 90,
       "required": true,
-      "checksum_sha256": "79e3723549740c2ed02ff388b2286491d5866c41a68ec48367fa3460732ed2de"
+      "checksum_sha256": "fbdfe7fccdf04990ce8435934c9b044a8dba4f6e050ea9db75b4b8b7af322a01"
     }
   ]
 }

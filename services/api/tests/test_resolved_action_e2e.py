@@ -106,6 +106,18 @@ def _structured_payload(
                 revision_request={
                     "change_summary": "Refine hero hierarchy and pricing emphasis.",
                     "targets": ["hero", "pricing"],
+                    "patch_contract": {
+                        "version": "1.0",
+                        "fallback_mode": "safe_rewrite",
+                        "operations": [
+                            {
+                                "op": "replace_file",
+                                "path": "src/app/page.tsx",
+                                "language": "tsx",
+                                "content": "export default function Page() { return <main>Revised</main>; }\n",
+                            }
+                        ],
+                    },
                 },
             ),
             "propose_revision",

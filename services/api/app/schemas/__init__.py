@@ -6,10 +6,10 @@ Request/Response schemas for API endpoints.
 """
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 
 # =============================================================================
@@ -337,6 +337,143 @@ class PreviewSessionVerifyResponse(BaseModel):
     entrypoint: str
     expires_at: datetime
     artifact_endpoint: str
+
+
+# =============================================================================
+# Phase 3 Patch Contract Schemas
+# =============================================================================
+
+PatchLanguage = Literal["ts", "tsx", "js", "jsx", "json", "css", "html"]
+PatchOperationType = Literal["replace_file", "replace_range"]
+
+
+class PatchTextRange(BaseModel):
+    """Character-offset range for deterministic partial edits."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    start: int = Field(..., ge=0)
+    end: int = Field(..., ge=0)
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> "PatchTextRange":
+        if self.end < self.start:
+            raise ValueError("Patch range end must be greater than or equal to start")
+        return self
+
+
+class PatchOperation(BaseModel):
+    """Single deterministic patch operation over a project file."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    op: PatchOperationType
+    path: str = Field(..., min_length=1, max_length=260)
+    language: Optional[PatchLanguage] = None
+    expected_sha256: Optional[str] = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    range: Optional[PatchTextRange] = None
+    content: str = Field(default="", max_length=1_000_000)
+
+    @field_validator("path")
+    @classmethod
+    def validate_path(cls, value: str) -> str:
+        normalized = value.replace("\\", "/").strip()
+
+        if not normalized:
+            raise ValueError("Patch path must not be empty")
+        if normalized.startswith("/"):
+            raise ValueError("Patch path must be relative")
+        if normalized in {".", ".."}:
+            raise ValueError("Patch path must target a file")
+        if normalized.startswith("../") or "/../" in normalized:
+            raise ValueError("Patch path traversal is not allowed")
+        if "\x00" in normalized:
+            raise ValueError("Patch path must not include null bytes")
+
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_shape(self) -> "PatchOperation":
+        if self.op == "replace_file" and self.range is not None:
+            raise ValueError("replace_file must not include range")
+
+        if self.op == "replace_range" and self.range is None:
+            raise ValueError("replace_range requires range")
+
+        return self
+
+
+class PatchContractRequest(BaseModel):
+    """Phase 3 patch contract payload for deterministic file updates."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal["1.0"] = "1.0"
+    project_id: Optional[UUID] = None
+    generation_id: Optional[UUID] = None
+    fallback_mode: Literal["safe_rewrite", "reject"] = "safe_rewrite"
+    operations: list[PatchOperation] = Field(..., min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def validate_unique_targets(self) -> "PatchContractRequest":
+        seen: set[tuple[str, int, int]] = set()
+        for operation in self.operations:
+            if operation.range is None:
+                key = (operation.path, -1, -1)
+            else:
+                key = (operation.path, operation.range.start, operation.range.end)
+
+            if key in seen:
+                raise ValueError(
+                    "Duplicate patch operation target detected; path+range must be unique"
+                )
+            seen.add(key)
+
+        return self
+
+
+class PatchContractValidationResponse(BaseModel):
+    """Validation receipt for a patch contract payload."""
+
+    valid: bool = True
+    project_id: UUID
+    generation_id: Optional[UUID] = None
+    version: str
+    operation_count: int = Field(..., ge=1)
+    files_touched: list[str]
+    fallback_mode: Literal["safe_rewrite", "reject"]
+
+
+class PatchConflictItem(BaseModel):
+    """Single patch conflict raised during patch-contract resolution."""
+
+    operation_index: int = Field(..., ge=0)
+    path: str
+    op: PatchOperationType
+    code: Literal["missing_file", "hash_mismatch", "invalid_range"]
+    message: str
+    fallback_applied: bool = False
+
+
+class PatchContractApplyRequest(BaseModel):
+    """Request payload for applying a patch contract against in-memory files."""
+
+    contract: PatchContractRequest
+    files: dict[str, str] = Field(default_factory=dict)
+
+
+class PatchContractApplyResponse(BaseModel):
+    """Result payload for patch-contract conflict resolution and rollback handling."""
+
+    applied: bool
+    rolled_back: bool
+    applied_operations: int = Field(..., ge=0)
+    fallback_mode: Literal["safe_rewrite", "reject"]
+    files: dict[str, str]
+    conflicts: list[PatchConflictItem] = Field(default_factory=list)
+    project_id: UUID
+    generation_id: Optional[UUID] = None
+    version: str
 
 
 # =============================================================================

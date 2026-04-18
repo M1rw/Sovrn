@@ -45,6 +45,21 @@ def _structured_content(
     return json.dumps(payload)
 
 
+def _revision_patch_contract_payload() -> dict:
+    return {
+        "version": "1.0",
+        "fallback_mode": "safe_rewrite",
+        "operations": [
+            {
+                "op": "replace_file",
+                "path": "src/app/page.tsx",
+                "language": "tsx",
+                "content": "export default function Page() { return <main>Updated</main>; }\n",
+            }
+        ],
+    }
+
+
 @pytest.mark.parametrize("action", ["respond", "ask_clarification", "error_recoverable"])
 def test_resolved_action_accepts_base_actions(action: str) -> None:
     metadata = ai._resolve_backend_action_metadata(
@@ -88,11 +103,27 @@ def test_propose_revision_passes_with_revision_intent_and_scope() -> None:
             revision_request={
                 "change_summary": "Adjust spacing and hero hierarchy",
                 "targets": ["hero", "pricing"],
+                "patch_contract": _revision_patch_contract_payload(),
             },
         ),
     )
     assert metadata["resolved_action"] == "propose_revision"
     assert metadata["resolved_action_reason"] == "revision_gate_passed"
+
+
+def test_propose_revision_falls_back_without_patch_contract() -> None:
+    metadata = ai._resolve_backend_action_metadata(
+        _request("please revise the layout and update the hero section"),
+        _structured_content(
+            action="propose_revision",
+            revision_request={
+                "change_summary": "Adjust spacing and hero hierarchy",
+                "targets": ["hero", "pricing"],
+            },
+        ),
+    )
+    assert metadata["resolved_action"] == "ask_clarification"
+    assert metadata["resolved_action_reason"] == "revision_gate_failed"
 
 
 def test_propose_revision_falls_back_without_revision_scope() -> None:

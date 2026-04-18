@@ -10,6 +10,7 @@ describe('use-preview-runtime bridge helpers', () => {
     expect(script).toContain('sovrn.preview.ping');
     expect(script).toContain('sovrn.preview.pong');
     expect(script).toContain('sovrn.preview.reload');
+    expect(script).toContain('sovrn.preview.node.select');
   });
 
   it('injects bridge script before closing body tag when present', () => {

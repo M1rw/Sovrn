@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
 import { 
   Send, 
@@ -63,9 +63,26 @@ import {
   type GeneratedFile,
   type PreviewStreamState,
 } from './preview-lifecycle';
+import {
+  applyEditorDraftsToGeneratedFiles,
+  buildPatchContractRequestFromDrafts,
+} from './patch-contract';
+import {
+  mapPreviewNodeSelectionToGeneratedFiles,
+  parsePreviewNodeSelection,
+  type PreviewNodeSelection,
+} from './node-selection';
 
 type ViewMode = 'preview' | 'code';
 type PreviewBridgeState = 'idle' | 'pending' | 'connected' | 'failed';
+
+interface PreviewNodeSelectionState {
+  selection: PreviewNodeSelection;
+  mappedFileName?: string;
+  mappedLine?: number;
+  score?: number;
+  reason?: string;
+}
 
 interface Message {
   id: string;
@@ -237,6 +254,7 @@ export default function BuilderPage() {
   const [previewStreamReconnectNonce, setPreviewStreamReconnectNonce] = useState(0);
   const [editorDrafts, setEditorDrafts] = useState<Record<string, string>>({});
   const [isApplyingEditorPatch, setIsApplyingEditorPatch] = useState(false);
+  const [previewNodeSelection, setPreviewNodeSelection] = useState<PreviewNodeSelectionState | null>(null);
   const [editorBridgeLastAppliedAt, setEditorBridgeLastAppliedAt] = useState<number | null>(null);
   const [isRestartingPreviewRuntime, setIsRestartingPreviewRuntime] = useState(false);
   const {
@@ -322,6 +340,16 @@ export default function BuilderPage() {
   }, [generatedFiles, selectedFile]);
 
   useEffect(() => {
+    if (!previewNodeSelection?.mappedFileName) {
+      return;
+    }
+
+    if (!generatedFiles.some((file) => file.name === previewNodeSelection.mappedFileName)) {
+      setPreviewNodeSelection(null);
+    }
+  }, [generatedFiles, previewNodeSelection?.mappedFileName]);
+
+  useEffect(() => {
     if (!generatedHtml && generatedFiles.length === 0) {
       setPreviewBridgeState('idle');
       return;
@@ -401,6 +429,36 @@ export default function BuilderPage() {
     };
   }, [generatedFiles, generatedHtml, mountWorkspace, previewBootstrapSession, session?.accessToken]);
 
+  const handlePreviewNodeSelection = useCallback(
+    (rawNode: unknown) => {
+      const selection = parsePreviewNodeSelection(rawNode);
+      if (!selection) {
+        return;
+      }
+
+      const match = mapPreviewNodeSelectionToGeneratedFiles(selection, generatedFiles);
+      if (match) {
+        setSelectedFile(match.fileName);
+        setViewMode('code');
+      }
+
+      setPreviewNodeSelection({
+        selection,
+        mappedFileName: match?.fileName,
+        mappedLine: match?.line,
+        score: match?.score,
+        reason: match?.reason,
+      });
+
+      recordClientMetric('builder_preview_node_selection_count', 1, {
+        mapped: Boolean(match),
+        tag_name: selection.tagName,
+        source_file: match?.fileName ?? 'unresolved',
+      });
+    },
+    [generatedFiles]
+  );
+
   useEffect(() => {
     if (!previewRuntimeBridgeChannel || !previewRuntimeUrl) {
       return;
@@ -425,6 +483,12 @@ export default function BuilderPage() {
       }
 
       const messageType = payload.type;
+      if (messageType === 'sovrn.preview.node.select') {
+        setPreviewBridgeLastEventAt(Date.now());
+        handlePreviewNodeSelection(payload.node);
+        return;
+      }
+
       if (messageType === 'sovrn.preview.ready' || messageType === 'sovrn.preview.pong') {
         setPreviewBridgeState('connected');
         setPreviewBridgeLastEventAt(Date.now());
@@ -437,7 +501,7 @@ export default function BuilderPage() {
     return () => {
       window.removeEventListener('message', handlePreviewBridgeMessage);
     };
-  }, [previewRuntimeBridgeChannel, previewRuntimeUrl]);
+  }, [handlePreviewNodeSelection, previewRuntimeBridgeChannel, previewRuntimeUrl]);
 
   useEffect(() => {
     if (
@@ -619,7 +683,23 @@ Return only valid JSON matching this schema:
   "assistant_message": "string",
   "questions": ["string"],
   "generation_request": { "brief": "string" } | null,
-  "revision_request": null,
+  "revision_request": {
+    "change_summary": "string",
+    "targets": ["string"],
+    "patch_contract": {
+      "version": "1.0",
+      "fallback_mode": "safe_rewrite" | "reject",
+      "operations": [
+        {
+          "op": "replace_file" | "replace_range",
+          "path": "relative/path.ext",
+          "language": "ts" | "tsx" | "js" | "jsx" | "json" | "css" | "html" | null,
+          "range": { "start": 0, "end": 0 } | null,
+          "content": "string"
+        }
+      ]
+    }
+  } | null,
   "state_patch": {},
   "meta": { "source": "builder" }
 }
@@ -627,7 +707,9 @@ Return only valid JSON matching this schema:
 Rules:
 - Use action "ready_to_generate" only when you have enough detail to build the site now.
 - Keep assistant_message concise and user-friendly.
-- If action is "ready_to_generate", include generation_request.brief.`;
+- If action is "ready_to_generate", include generation_request.brief.
+- If action is "propose_revision", include revision_request.change_summary, revision_request.targets, and revision_request.patch_contract.operations.
+- Never return raw overwrite payloads outside revision_request.patch_contract.operations.`;
     
     const aiChatStartedAt = Date.now();
     const correlationId = createCorrelationId('/api/v1/ai/chat');
@@ -1060,14 +1142,37 @@ Rules:
 
     setIsApplyingEditorPatch(true);
     try {
-      const patchedFiles: GeneratedFile[] = generatedFiles.map((file) => {
-        const patchedContent = editorDrafts[file.name] ?? file.content;
-        return {
-          ...file,
-          content: patchedContent,
-          size: new TextEncoder().encode(patchedContent).length,
-        };
+      const patchContractRequest = buildPatchContractRequestFromDrafts({
+        generatedFiles,
+        editorDrafts,
+        projectId: previewBootstrapSession?.project_id,
+        generationId: previewBootstrapSession?.generation_id,
       });
+
+      if (patchContractRequest) {
+        if (session?.accessToken && previewBootstrapSession?.project_id) {
+          const validationReceipt = await projectsApi.validatePatchContract(
+            session.accessToken,
+            previewBootstrapSession.project_id,
+            patchContractRequest
+          );
+
+          recordClientMetric('builder_editor_patch_contract_validation_count', 1, {
+            valid: validationReceipt.valid,
+            operation_count: validationReceipt.operation_count,
+            fallback_mode: validationReceipt.fallback_mode,
+          });
+        } else {
+          recordClientMetric('builder_editor_patch_contract_validation_skipped_count', 1, {
+            reason: session?.accessToken ? 'missing_project' : 'missing_token',
+          });
+        }
+      }
+
+      const patchedFiles: GeneratedFile[] = applyEditorDraftsToGeneratedFiles(
+        generatedFiles,
+        editorDrafts
+      );
 
       setGeneratedFiles(patchedFiles);
 
@@ -1895,6 +2000,33 @@ Rules:
                     }`}
                   >
                     Reconnect stream
+                  </button>
+                </div>
+              )}
+
+              {previewNodeSelection && (
+                <div
+                  className={`px-4 py-2 flex items-center justify-between border-b ${
+                    isDark
+                      ? 'border-sky-400/25 bg-sky-500/10 text-sky-100'
+                      : 'border-sky-500/30 bg-sky-100 text-sky-900'
+                  }`}
+                >
+                  <p className="text-xs leading-5">
+                    Selected <span className="font-semibold">&lt;{previewNodeSelection.selection.tagName}&gt;</span>
+                    {previewNodeSelection.mappedFileName
+                      ? ` -> ${previewNodeSelection.mappedFileName}:${previewNodeSelection.mappedLine ?? 1}`
+                      : ' -> source file could not be resolved'}
+                  </p>
+                  <button
+                    onClick={() => setPreviewNodeSelection(null)}
+                    className={`ml-4 px-2.5 py-1 rounded-md text-xs font-medium transition-all ${
+                      isDark
+                        ? 'bg-sky-300/20 hover:bg-sky-300/30 text-sky-100'
+                        : 'bg-sky-500/20 hover:bg-sky-500/30 text-sky-900'
+                    }`}
+                  >
+                    Clear
                   </button>
                 </div>
               )}
