@@ -14,7 +14,7 @@ Only actionable pending engineering work is listed below.
 
 ## Phase 2 Next Work (WebContainer Runtime)
 
-1. Sync current `vscode-vfs://github/Miljte/Sovrn` edits into local clone before runtime execution (`C:\Miljte\Sovrn` currently does not include latest workspace changes).
+1. Ensure active local runtime clone is synced with workspace edits before staging execution (latest validated runtime clone: `E:\Synthos\[Sovrn]`).
 2. Run staging preview latency benchmark (preferred: `eval/load/run-preview-latency.ps1`; fallback: `eval/load/preview_latency_benchmark.py`) and verify p95 total <= 1.5s in `eval/load/phase2_preview_latency_report.json`.
 3. Capture benchmark evidence in `docs/Plan/PHASE2_PREVIEW_LATENCY_VALIDATION_2026-04-17.md` after the staging run completes.
 4. Confirm canary monitoring checks in staging after rollout ring activation (preview latency and stream reconnect metrics).
@@ -23,6 +23,9 @@ Completed in current implementation slice:
 
 1. Added frontend preview lifecycle integration helper coverage and validated suites (`src/app/builder/preview-lifecycle.test.ts`, `src/lib/api.preview-stream.test.ts`, `src/hooks/use-preview-runtime.test.ts`) with `npx jest` (3 suites, 12 tests passed).
 2. Added backend endpoint-level Phase 2 contract tests and validated expanded backend suite with `py -3.11 -m pytest tests/test_phase2_preview_bootstrap.py tests/test_generation_service_preview_budget.py` (18 passed).
+3. Hardened `eval/load/run-preview-latency.ps1` to use `-LiteralPath` path operations so benchmark execution works from bracketed clone paths (for example `E:\Synthos\[Sovrn]`).
+4. Revalidated localhost mock latency harness with the hardened runner (`eval/load/phase2_preview_latency_report.local_mock.json`: 5/5 successful, p95 total 6.57 ms, p95 stream first update 2.94 ms, non-gating sanity evidence).
+5. Expanded local frontend runtime validation to include telemetry ingestion and route coverage (`npx jest` across 6 suites, 20 tests passed).
 
 ## Documentation Follow-Up (No Behavioral Change)
 

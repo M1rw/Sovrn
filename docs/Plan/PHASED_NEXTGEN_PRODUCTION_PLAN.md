@@ -246,6 +246,8 @@ Goal: Deliver interactive browser-native runtime with fast visual feedback.
 - [x] Runtime verification for expanded Phase 2 backend suite: py -3.11 -m pytest tests/test_phase2_preview_bootstrap.py tests/test_generation_service_preview_budget.py (18 passed)
 - [x] Runtime verification for expanded Phase 2 frontend preview suites: npx jest src/app/builder/preview-lifecycle.test.ts src/lib/api.preview-stream.test.ts src/hooks/use-preview-runtime.test.ts (3 suites, 12 tests passed)
 - [x] Validated local mock latency harness with real benchmark implementation and runner script (no placeholder benchmark substitution); report: eval/load/phase2_preview_latency_report.local_mock.json (5/5 successful, p95 total 31.78 ms, non-gating sanity evidence)
+- [x] Hardened eval/load/run-preview-latency.ps1 for bracketed clone paths by switching Resolve-Path, Push-Location, Test-Path, and Get-Content calls to -LiteralPath.
+- [x] Revalidated local mock latency benchmark after literal-path hardening; report: eval/load/phase2_preview_latency_report.local_mock.json (5/5 successful, p95 total 6.57 ms, p95 stream first update 2.94 ms, non-gating sanity evidence)
 - [x] Validated Phase 2 rollback drill path with runtime fallback flag disabled (`NEXT_PUBLIC_BUILDER_WEBCONTAINER_ENABLED=false`) and reran preview lifecycle/endpoint suites: frontend (3 suites, 12 tests passed), backend (tests/test_phase2_preview_bootstrap.py: 15 passed)
 
 ### Frontend

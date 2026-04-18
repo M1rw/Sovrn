@@ -27,7 +27,7 @@ if ([string]::IsNullOrWhiteSpace($ProjectId)) {
     throw 'Missing -ProjectId or SOVRN_PROJECT_ID.'
 }
 
-$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+$repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $reportPath = Join-Path $repoRoot $OutputPath
 
 $scriptArgs = @(
@@ -53,7 +53,7 @@ Write-Host "Running preview latency benchmark against $BaseUrl"
 Write-Host "Project: $ProjectId"
 Write-Host "Output: $OutputPath"
 
-Push-Location $repoRoot
+Push-Location -LiteralPath $repoRoot
 try {
     & $PythonCommand $PythonSelector @scriptArgs
     if ($LASTEXITCODE -ne 0) {
@@ -63,11 +63,11 @@ try {
     Pop-Location
 }
 
-if (-not (Test-Path $reportPath)) {
+if (-not (Test-Path -LiteralPath $reportPath)) {
     throw "Expected report file not found: $reportPath"
 }
 
-$report = Get-Content $reportPath -Raw | ConvertFrom-Json
+$report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
 if ($null -eq $report.summary) {
     throw "Report summary missing in: $reportPath"
 }
