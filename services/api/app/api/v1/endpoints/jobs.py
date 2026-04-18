@@ -154,6 +154,7 @@ async def retry_job(
         type=job.type,
         status=JobStatus.QUEUED,
         spark_cost=job.spark_cost,
+        priority=job.priority,
         input=job.input,
     )
     db.add(new_job)

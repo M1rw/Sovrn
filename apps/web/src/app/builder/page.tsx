@@ -72,9 +72,11 @@ import {
   parsePreviewNodeSelection,
   type PreviewNodeSelection,
 } from './node-selection';
+import { parseJobOrchestrationTimeline } from './orchestration-timeline';
 
 type ViewMode = 'preview' | 'code';
 type PreviewBridgeState = 'idle' | 'pending' | 'connected' | 'failed';
+type GenerationQualityMode = 'fast' | 'balanced' | 'high';
 
 interface PreviewNodeSelectionState {
   selection: PreviewNodeSelection;
@@ -102,7 +104,7 @@ interface Message {
 interface TaskStep {
   id: string;
   label: string;
-  status: 'pending' | 'running' | 'completed';
+  status: 'pending' | 'running' | 'completed' | 'failed';
   duration?: number;
   detail?: string;
 }
@@ -243,6 +245,10 @@ export default function BuilderPage() {
   const [greeting, setGreeting] = useState('Hello');
   const [taskSteps, setTaskSteps] = useState<TaskStep[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [generationQualityMode, setGenerationQualityMode] =
+    useState<GenerationQualityMode>('balanced');
+  const [currentOrchestrationAqeLevel, setCurrentOrchestrationAqeLevel] =
+    useState<string | null>(null);
   const [conversationThreadId, setConversationThreadId] = useState<string | null>(null);
   const [conversationTurnIndex, setConversationTurnIndex] = useState<number | null>(null);
   const [conversationStateVersion, setConversationStateVersion] = useState<number | null>(null);
@@ -823,10 +829,13 @@ Rules:
     error?: string;
   }> => {
     const generationStartedAt = Date.now();
+    setCurrentOrchestrationAqeLevel(null);
     setTaskSteps([
       { id: 'create-project', label: 'Create project', status: 'running' },
       { id: 'queue-job', label: 'Queue generation job', status: 'pending' },
-      { id: 'process-job', label: 'Process generation job', status: 'pending' },
+      { id: 'architect', label: 'Architect', status: 'pending' },
+      { id: 'coder', label: 'Coder', status: 'pending' },
+      { id: 'critic', label: 'Critic', status: 'pending' },
     ]);
 
     let projectId: string | undefined;
@@ -849,12 +858,15 @@ Rules:
       setTaskSteps([
         { id: 'create-project', label: 'Create project', status: 'completed' },
         { id: 'queue-job', label: 'Queue generation job', status: 'running' },
-        { id: 'process-job', label: 'Process generation job', status: 'pending' },
+        { id: 'architect', label: 'Architect', status: 'pending' },
+        { id: 'coder', label: 'Coder', status: 'pending' },
+        { id: 'critic', label: 'Critic', status: 'pending' },
       ]);
 
       const job = await projectsApi.generate(token, project.id, {
         brief: prompt,
         locale: 'en',
+        quality_mode: generationQualityMode,
         settings: { style: 'modern' },
       });
       jobId = job.id;
@@ -862,7 +874,9 @@ Rules:
       setTaskSteps([
         { id: 'create-project', label: 'Create project', status: 'completed' },
         { id: 'queue-job', label: 'Queue generation job', status: 'completed' },
-        { id: 'process-job', label: 'Process generation job', status: 'running' },
+        { id: 'architect', label: 'Architect', status: 'running' },
+        { id: 'coder', label: 'Coder', status: 'pending' },
+        { id: 'critic', label: 'Critic', status: 'pending' },
       ]);
 
       const pollStartedAt = Date.now();
@@ -875,6 +889,44 @@ Rules:
 
         await new Promise((resolve) => setTimeout(resolve, 1500));
         currentJob = await jobsApi.get(token, job.id);
+
+        const timeline = parseJobOrchestrationTimeline(currentJob.output);
+        if (timeline) {
+          setCurrentOrchestrationAqeLevel(timeline.aqeLevel || null);
+          if (timeline.steps.length > 0) {
+            setTaskSteps(
+              timeline.steps.map((step) => ({
+                id: step.id,
+                label: step.label,
+                status: step.status,
+                detail: step.detail,
+                duration:
+                  typeof step.durationMs === 'number'
+                    ? Number((step.durationMs / 1000).toFixed(2))
+                    : undefined,
+              }))
+            );
+          }
+        }
+      }
+
+      const finalTimeline = parseJobOrchestrationTimeline(currentJob.output);
+      if (finalTimeline?.aqeLevel) {
+        setCurrentOrchestrationAqeLevel(finalTimeline.aqeLevel);
+      }
+      if (finalTimeline && finalTimeline.steps.length > 0) {
+        setTaskSteps(
+          finalTimeline.steps.map((step) => ({
+            id: step.id,
+            label: step.label,
+            status: step.status,
+            detail: step.detail,
+            duration:
+              typeof step.durationMs === 'number'
+                ? Number((step.durationMs / 1000).toFixed(2))
+                : undefined,
+          }))
+        );
       }
 
       const projectWithGenerations = await projectsApi.get(token, project.id);
@@ -901,9 +953,14 @@ Rules:
       setGeneratedHtml(resolved.previewHtml);
       setShowPreview(true);
       setGeneratedFiles(files);
-      setTaskSteps((prev) => prev.map((step) => ({ ...step, status: 'completed' })));
+      setTaskSteps((prev) =>
+        prev.map((step) =>
+          step.status === 'failed' ? step : { ...step, status: 'completed' }
+        )
+      );
       recordClientMetric('builder_generation_duration_ms', Date.now() - generationStartedAt, {
         success: true,
+        quality_mode: generationQualityMode,
       });
 
       return {
@@ -919,6 +976,7 @@ Rules:
       const errorMessage = error instanceof Error ? error.message : 'Unknown canonical generation error.';
       recordClientMetric('builder_generation_duration_ms', Date.now() - generationStartedAt, {
         success: false,
+        quality_mode: generationQualityMode,
       });
       recordUiError(error, 'boundary', { scope: 'builder_generation' });
       return {
@@ -1562,6 +1620,36 @@ Rules:
           </div>
 
           <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2">
+              <span className={`text-[11px] uppercase tracking-wide ${isDark ? 'text-white/40' : 'text-black/40'}`}>
+                Quality
+              </span>
+              <select
+                value={generationQualityMode}
+                onChange={(event) => setGenerationQualityMode(event.target.value as GenerationQualityMode)}
+                disabled={isGenerating}
+                className={`text-xs rounded-lg px-2.5 py-1.5 border transition-all ${
+                  isDark
+                    ? 'bg-white/[0.04] border-white/[0.12] text-white/80'
+                    : 'bg-white border-black/[0.12] text-black/80'
+                } disabled:opacity-60`}
+              >
+                <option value="fast">Fast</option>
+                <option value="balanced">Balanced</option>
+                <option value="high">High</option>
+              </select>
+            </div>
+            {currentOrchestrationAqeLevel && (
+              <span
+                className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                  isDark
+                    ? 'bg-white/[0.08] text-white/70 border border-white/[0.12]'
+                    : 'bg-black/[0.06] text-black/70 border border-black/[0.12]'
+                }`}
+              >
+                AQE {currentOrchestrationAqeLevel}
+              </span>
+            )}
             {generatedHtml && (
               <button
                 onClick={() => setShowPreview(!showPreview)}
@@ -1722,16 +1810,64 @@ Rules:
                                   <span className={`text-sm ${isDark ? 'text-white/40' : 'text-black/40'}`}>
                                     Generating website
                                   </span>
+                                  {currentOrchestrationAqeLevel && (
+                                    <span
+                                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                                        isDark
+                                          ? 'bg-white/[0.08] text-white/65 border border-white/[0.1]'
+                                          : 'bg-black/[0.06] text-black/65 border border-black/[0.1]'
+                                      }`}
+                                    >
+                                      AQE {currentOrchestrationAqeLevel}
+                                    </span>
+                                  )}
                                 </div>
                                 <div className={`rounded-xl overflow-hidden border ${isDark ? 'border-white/[0.08] bg-white/[0.02]' : 'border-black/[0.08] bg-black/[0.02]'}`}>
                                   <div className={`px-4 py-2.5 flex items-center justify-between border-b ${isDark ? 'border-white/[0.06]' : 'border-black/[0.06]'}`}>
-                                    <span className={`text-sm font-medium ${isDark ? 'text-white/70' : 'text-black/70'}`}>Files</span>
+                                    <span className={`text-sm font-medium ${isDark ? 'text-white/70' : 'text-black/70'}`}>Generation Timeline</span>
+                                    <span className={`text-[11px] ${isDark ? 'text-white/35' : 'text-black/35'}`}>
+                                      Mode: {generationQualityMode}
+                                    </span>
                                   </div>
-                                  <div className={`px-4 py-3 ${isDark ? 'text-white/30' : 'text-black/30'}`}>
-                                    <div className="flex items-center gap-2">
-                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                      <span className="text-sm">Creating files...</span>
-                                    </div>
+                                  <div className={`px-4 py-3 space-y-2 ${isDark ? 'text-white/30' : 'text-black/30'}`}>
+                                    {taskSteps.length === 0 && (
+                                      <div className="flex items-center gap-2">
+                                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                        <span className="text-sm">Bootstrapping orchestration...</span>
+                                      </div>
+                                    )}
+                                    {taskSteps.map((step) => (
+                                      <div key={step.id} className="flex items-start justify-between gap-3">
+                                        <div className="flex items-start gap-2">
+                                          <span
+                                            className={`mt-1 h-2.5 w-2.5 rounded-full ${
+                                              step.status === 'completed'
+                                                ? 'bg-emerald-400'
+                                                : step.status === 'running'
+                                                  ? 'bg-sky-400 task-running'
+                                                  : step.status === 'failed'
+                                                    ? 'bg-rose-400'
+                                                    : isDark
+                                                      ? 'bg-white/20'
+                                                      : 'bg-black/20'
+                                            }`}
+                                          />
+                                          <div>
+                                            <p className={`text-sm ${isDark ? 'text-white/75' : 'text-black/75'}`}>
+                                              {step.label}
+                                            </p>
+                                            {step.detail && (
+                                              <p className={`text-[11px] ${isDark ? 'text-white/35' : 'text-black/35'}`}>
+                                                {step.detail}
+                                              </p>
+                                            )}
+                                          </div>
+                                        </div>
+                                        <span className={`text-[11px] uppercase ${isDark ? 'text-white/35' : 'text-black/35'}`}>
+                                          {step.status}
+                                        </span>
+                                      </div>
+                                    ))}
                                   </div>
                                 </div>
                               </div>

@@ -5,6 +5,7 @@ Benchmarks website generation quality against Stunning.so
 
 import asyncio
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -248,6 +249,62 @@ class SOVRNEvaluator:
         final_response.raise_for_status()
         
         return final_response.json(), generation_time
+
+    @staticmethod
+    def _build_content_blob(
+        strategy: dict,
+        design: dict,
+        code: dict,
+        generation: dict,
+    ) -> str:
+        payload = {
+            "strategy": strategy,
+            "design": design,
+            "code": code,
+            "generation": generation,
+        }
+        serialized = json.dumps(payload, ensure_ascii=False)
+        return serialized.lower()
+
+    @staticmethod
+    def _matches_expected_date_format(content_blob: str, locale: str) -> bool:
+        if locale == "en-US":
+            return bool(re.search(r"\b(0?[1-9]|1[0-2])[/-](0?[1-9]|[12]\d|3[01])[/-](\d{2,4})\b", content_blob))
+        if locale == "de-DE":
+            return bool(re.search(r"\b(0?[1-9]|[12]\d|3[01])\.(0?[1-9]|1[0-2])\.(\d{2,4})\b", content_blob))
+        if locale == "pt-BR":
+            return bool(re.search(r"\b(0?[1-9]|[12]\d|3[01])/(0?[1-9]|1[0-2])/(\d{2,4})\b", content_blob))
+        if locale == "ja-JP":
+            return bool(
+                re.search(r"\b\d{4}/\d{1,2}/\d{1,2}\b", content_blob)
+                or re.search(r"\b\d{4}年\d{1,2}月\d{1,2}日\b", content_blob)
+            )
+        if locale == "ar-AE":
+            return bool(re.search(r"\b(0?[1-9]|[12]\d|3[01])/(0?[1-9]|1[0-2])/(\d{2,4})\b", content_blob))
+        return True
+
+    @staticmethod
+    def _matches_expected_payment_methods(content_blob: str, expected_methods: list[str]) -> bool:
+        if not expected_methods:
+            return True
+
+        aliases = {
+            "credit_card": ["credit card", "visa", "mastercard", "amex", "card", "cartão", "cartao"],
+            "paypal": ["paypal"],
+            "klarna": ["klarna"],
+            "sepa": ["sepa", "iban"],
+            "pix": ["pix"],
+            "boleto": ["boleto"],
+        }
+
+        hits = 0
+        for method in expected_methods:
+            method_aliases = aliases.get(method, [method.replace("_", " ")])
+            if any(alias in content_blob for alias in method_aliases):
+                hits += 1
+
+        required_hits = max(1, len(expected_methods) - 1)
+        return hits >= required_hits
     
     def analyze_generation(
         self,
@@ -290,10 +347,36 @@ class SOVRNEvaluator:
         
         # Analyze code output
         code = generation.get("code_output", {})
+        content_blob = self._build_content_blob(strategy, design, code, generation)
+
+        expected_payment_methods = test_case.expected_cultural.get("payment_methods", [])
+        result.correct_date_format = self._matches_expected_date_format(content_blob, test_case.locale)
+        result.correct_payment_methods = self._matches_expected_payment_methods(
+            content_blob,
+            expected_payment_methods,
+        )
+        expected_legal = test_case.expected_cultural.get("legal", [])
+        if expected_legal:
+            result.correct_legal_notices = all(keyword.lower() in content_blob for keyword in expected_legal)
+        else:
+            result.correct_legal_notices = True
+
+        preview_html = code.get("preview_html") or generation.get("preview_html")
+        if isinstance(preview_html, str) and preview_html.strip():
+            soup = BeautifulSoup(preview_html, "html.parser")
+            has_heading = bool(soup.find(["h1", "h2"]))
+            has_nav = bool(soup.find("nav"))
+            has_main = bool(soup.find("main"))
+            result.semantic_html = has_heading and (has_nav or has_main)
+            images = soup.find_all("img")
+            result.accessible_images = all(bool(img.get("alt")) for img in images) if images else True
+
         result.typescript_strict = True  # Default for generated code
         result.proper_error_handling = True
-        result.semantic_html = True
-        result.accessible_images = True
+        if not result.semantic_html:
+            result.semantic_html = "<main" in content_blob or "<section" in content_blob
+        if not result.accessible_images:
+            result.accessible_images = "alt=" in content_blob
         
         # Calculate scores
         business_checks = [
@@ -308,8 +391,8 @@ class SOVRNEvaluator:
         cultural_checks = [
             result.correct_currency,
             result.rtl_support_if_needed,
-            result.correct_date_format or True,  # TODO: implement
-            result.correct_payment_methods or True,  # TODO: implement
+            result.correct_date_format,
+            result.correct_payment_methods,
         ]
         result.cultural_score = sum(cultural_checks) / len(cultural_checks) * 100
         

@@ -10,7 +10,7 @@ param(
     [int]$StreamTimeoutMs = $(if ([string]::IsNullOrWhiteSpace($env:SOVRN_PREVIEW_BENCH_STREAM_TIMEOUT_MS)) { 6000 } else { [int]$env:SOVRN_PREVIEW_BENCH_STREAM_TIMEOUT_MS }),
     [int]$RequestTimeoutMs = $(if ([string]::IsNullOrWhiteSpace($env:SOVRN_PREVIEW_BENCH_REQUEST_TIMEOUT_MS)) { 15000 } else { [int]$env:SOVRN_PREVIEW_BENCH_REQUEST_TIMEOUT_MS }),
     [double]$TargetP95Ms = $(if ([string]::IsNullOrWhiteSpace($env:SOVRN_PREVIEW_TARGET_P95_MS)) { 1500 } else { [double]$env:SOVRN_PREVIEW_TARGET_P95_MS }),
-    [string]$OutputPath = $(if ([string]::IsNullOrWhiteSpace($env:SOVRN_PREVIEW_BENCH_OUTPUT)) { 'eval/load/phase2_preview_latency_report.json' } else { $env:SOVRN_PREVIEW_BENCH_OUTPUT }),
+    [string]$OutputPath = $(if ([string]::IsNullOrWhiteSpace($env:SOVRN_PREVIEW_BENCH_OUTPUT)) { 'eval/load/preview_latency_report.json' } else { $env:SOVRN_PREVIEW_BENCH_OUTPUT }),
     [string]$PythonCommand = 'py',
     [string]$PythonSelector = '-3.11'
 )

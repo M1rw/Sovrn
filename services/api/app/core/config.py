@@ -9,7 +9,7 @@ All values can be overridden via environment variables.
 from functools import lru_cache
 from typing import List, Optional
 
-from pydantic import Field, PostgresDsn, field_validator
+from pydantic import AliasChoices, Field, PostgresDsn, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -62,14 +62,36 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return [origin.strip() for origin in v.split(",")]
         return v
+
+    @model_validator(mode="after")
+    def ensure_database_url(self) -> "Settings":
+        if self.DATABASE_URL is None and self.SUPABASE_DB_URL is None:
+            raise ValueError("Either DATABASE_URL or SUPABASE_DB_URL must be configured.")
+        return self
+
+    @property
+    def effective_database_url(self) -> str:
+        database_url = self.DATABASE_URL or self.SUPABASE_DB_URL
+        if database_url is None:
+            raise RuntimeError("Database URL is not configured.")
+        return str(database_url)
     
     # ==========================================================================
     # Database
     # ==========================================================================
-    DATABASE_URL: PostgresDsn
+    DATABASE_URL: Optional[PostgresDsn] = None
     DB_POOL_SIZE: int = 5
     DB_MAX_OVERFLOW: int = 10
     DB_POOL_TIMEOUT: int = 30
+
+    # ==========================================================================
+    # Supabase (optional managed backend)
+    # ==========================================================================
+    SUPABASE_ENABLED: bool = False
+    SUPABASE_URL: Optional[str] = None
+    SUPABASE_PUBLISHABLE_KEY: Optional[str] = None
+    SUPABASE_SERVICE_ROLE_KEY: Optional[str] = None
+    SUPABASE_DB_URL: Optional[PostgresDsn] = None
     
     # ==========================================================================
     # Redis (optional)
@@ -126,12 +148,12 @@ class Settings(BaseSettings):
     AI_CONTEXT_COMPACTION_RECENT_TURNS: int = Field(default=4, ge=1, le=50)
 
     # ==========================================================================
-    # AI Phase 5 Response Contract Rollout
+    # AI Structured Response Contract Rollout
     # ==========================================================================
     AI_RESOLVED_ACTION_RESPONSE_ENABLED: bool = False
 
     # ==========================================================================
-    # Phase 2 Preview Runtime Bootstrap
+    # Preview Runtime Bootstrap
     # ==========================================================================
     PREVIEW_SESSION_TOKEN_TTL_SECONDS: int = Field(default=600, ge=60, le=3600)
     PREVIEW_SESSION_TOKEN_MAX_TTL_SECONDS: int = Field(default=3600, ge=60, le=86400)
@@ -139,6 +161,146 @@ class Settings(BaseSettings):
     PREVIEW_BUILD_MAX_FILES: int = Field(default=12, ge=1, le=200)
     PREVIEW_BUILD_MAX_TOTAL_BYTES: int = Field(default=786432, ge=1024, le=10485760)
     PREVIEW_BUILD_MAX_FILE_BYTES: int = Field(default=262144, ge=1024, le=5242880)
+
+    # ==========================================================================
+    # Multi-Agent Orchestration (AQE + Lane Scheduling)
+    # ==========================================================================
+    ORCHESTRATION_RUNTIME_ENABLED: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("ORCHESTRATION_RUNTIME_ENABLED", "PHASE4_ORCHESTRATION_ENABLED"),
+    )
+    ORCHESTRATION_AQE_ENABLED: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("ORCHESTRATION_AQE_ENABLED", "PHASE4_AQE_ENABLED"),
+    )
+    ORCHESTRATION_AQE_INFERENCE_STATS_TIMEOUT_SECONDS: int = Field(
+        default=2,
+        ge=1,
+        le=30,
+        validation_alias=AliasChoices(
+            "ORCHESTRATION_AQE_INFERENCE_STATS_TIMEOUT_SECONDS",
+            "PHASE4_AQE_INFER_STATS_TIMEOUT_SECONDS",
+        ),
+    )
+
+    ORCHESTRATION_REQUEST_TIME_BUDGET_SECONDS: int = Field(
+        default=180,
+        ge=10,
+        le=900,
+        validation_alias=AliasChoices("ORCHESTRATION_REQUEST_TIME_BUDGET_SECONDS", "PHASE4_REQUEST_TIME_BUDGET_SECONDS"),
+    )
+    ORCHESTRATION_STAGE_TIMEOUT_SECONDS: int = Field(
+        default=45,
+        ge=5,
+        le=300,
+        validation_alias=AliasChoices("ORCHESTRATION_STAGE_TIMEOUT_SECONDS", "PHASE4_STAGE_TIMEOUT_SECONDS"),
+    )
+
+    ORCHESTRATION_CRITIC_MAX_ATTEMPTS: int = Field(
+        default=2,
+        ge=1,
+        le=8,
+        validation_alias=AliasChoices("ORCHESTRATION_CRITIC_MAX_ATTEMPTS", "PHASE4_CRITIC_MAX_ATTEMPTS"),
+    )
+    ORCHESTRATION_CRITIC_STRICT_FAIL: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("ORCHESTRATION_CRITIC_STRICT_FAIL", "PHASE4_CRITIC_STRICT_FAIL"),
+    )
+
+    ORCHESTRATION_LANE_PRIORITY_INTERACTIVE: int = Field(
+        default=100,
+        ge=0,
+        le=1000,
+        validation_alias=AliasChoices("ORCHESTRATION_LANE_PRIORITY_INTERACTIVE", "PHASE4_LANE_PRIORITY_INTERACTIVE"),
+    )
+    ORCHESTRATION_LANE_PRIORITY_QUALITY: int = Field(
+        default=55,
+        ge=0,
+        le=1000,
+        validation_alias=AliasChoices("ORCHESTRATION_LANE_PRIORITY_QUALITY", "PHASE4_LANE_PRIORITY_QUALITY"),
+    )
+    ORCHESTRATION_LANE_PRIORITY_BACKGROUND: int = Field(
+        default=15,
+        ge=0,
+        le=1000,
+        validation_alias=AliasChoices("ORCHESTRATION_LANE_PRIORITY_BACKGROUND", "PHASE4_LANE_PRIORITY_BACKGROUND"),
+    )
+
+    ORCHESTRATION_AQE_Q0_QUEUE_DEPTH: int = Field(
+        default=25,
+        ge=1,
+        le=10000,
+        validation_alias=AliasChoices("ORCHESTRATION_AQE_Q0_QUEUE_DEPTH", "PHASE4_AQE_Q0_QUEUE_DEPTH"),
+    )
+    ORCHESTRATION_AQE_Q1_QUEUE_DEPTH: int = Field(
+        default=12,
+        ge=1,
+        le=10000,
+        validation_alias=AliasChoices("ORCHESTRATION_AQE_Q1_QUEUE_DEPTH", "PHASE4_AQE_Q1_QUEUE_DEPTH"),
+    )
+    ORCHESTRATION_AQE_Q2_QUEUE_DEPTH: int = Field(
+        default=5,
+        ge=1,
+        le=10000,
+        validation_alias=AliasChoices("ORCHESTRATION_AQE_Q2_QUEUE_DEPTH", "PHASE4_AQE_Q2_QUEUE_DEPTH"),
+    )
+
+    ORCHESTRATION_AQE_Q0_WAITING_REQUESTS: int = Field(
+        default=10,
+        ge=1,
+        le=10000,
+        validation_alias=AliasChoices("ORCHESTRATION_AQE_Q0_WAITING_REQUESTS", "PHASE4_AQE_Q0_WAITING_REQUESTS"),
+    )
+    ORCHESTRATION_AQE_Q1_WAITING_REQUESTS: int = Field(
+        default=5,
+        ge=1,
+        le=10000,
+        validation_alias=AliasChoices("ORCHESTRATION_AQE_Q1_WAITING_REQUESTS", "PHASE4_AQE_Q1_WAITING_REQUESTS"),
+    )
+    ORCHESTRATION_AQE_Q2_WAITING_REQUESTS: int = Field(
+        default=2,
+        ge=1,
+        le=10000,
+        validation_alias=AliasChoices("ORCHESTRATION_AQE_Q2_WAITING_REQUESTS", "PHASE4_AQE_Q2_WAITING_REQUESTS"),
+    )
+
+    ORCHESTRATION_AQE_Q0_AVG_WAIT_MS: int = Field(
+        default=3500,
+        ge=100,
+        le=600000,
+        validation_alias=AliasChoices("ORCHESTRATION_AQE_Q0_AVG_WAIT_MS", "PHASE4_AQE_Q0_AVG_WAIT_MS"),
+    )
+    ORCHESTRATION_AQE_Q1_AVG_WAIT_MS: int = Field(
+        default=1500,
+        ge=100,
+        le=600000,
+        validation_alias=AliasChoices("ORCHESTRATION_AQE_Q1_AVG_WAIT_MS", "PHASE4_AQE_Q1_AVG_WAIT_MS"),
+    )
+    ORCHESTRATION_AQE_Q2_AVG_WAIT_MS: int = Field(
+        default=650,
+        ge=50,
+        le=600000,
+        validation_alias=AliasChoices("ORCHESTRATION_AQE_Q2_AVG_WAIT_MS", "PHASE4_AQE_Q2_AVG_WAIT_MS"),
+    )
+
+    ORCHESTRATION_AQE_Q0_QUEUE_UTILIZATION: float = Field(
+        default=0.9,
+        ge=0,
+        le=1,
+        validation_alias=AliasChoices("ORCHESTRATION_AQE_Q0_QUEUE_UTILIZATION", "PHASE4_AQE_Q0_QUEUE_UTILIZATION"),
+    )
+    ORCHESTRATION_AQE_Q1_QUEUE_UTILIZATION: float = Field(
+        default=0.7,
+        ge=0,
+        le=1,
+        validation_alias=AliasChoices("ORCHESTRATION_AQE_Q1_QUEUE_UTILIZATION", "PHASE4_AQE_Q1_QUEUE_UTILIZATION"),
+    )
+    ORCHESTRATION_AQE_Q2_QUEUE_UTILIZATION: float = Field(
+        default=0.4,
+        ge=0,
+        le=1,
+        validation_alias=AliasChoices("ORCHESTRATION_AQE_Q2_QUEUE_UTILIZATION", "PHASE4_AQE_Q2_QUEUE_UTILIZATION"),
+    )
     
     # ==========================================================================
     # Sparks (Monetization)

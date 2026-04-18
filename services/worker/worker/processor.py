@@ -35,6 +35,7 @@ class JobProcessor:
             "processed": 0,
             "succeeded": 0,
             "failed": 0,
+            "cancelled": 0,
             "total_duration_ms": 0.0,
             "last_duration_ms": 0.0,
             "last_error": None,
@@ -63,6 +64,7 @@ class JobProcessor:
             "processed": processed,
             "succeeded": self._stats["succeeded"],
             "failed": self._stats["failed"],
+            "cancelled": self._stats["cancelled"],
             "last_duration_ms": round(self._stats["last_duration_ms"], 2),
             "avg_duration_ms": avg_duration_ms,
             "last_error": self._stats["last_error"],
@@ -92,6 +94,17 @@ class JobProcessor:
             
             # Extract the output
             output = result.get("output", {})
+
+            if bool(result.get("cancelled")):
+                await self._cancel_job(job_id, output)
+                duration_ms = (time.perf_counter() - started_at) * 1000
+                self._stats["processed"] += 1
+                self._stats["cancelled"] += 1
+                self._stats["total_duration_ms"] += duration_ms
+                self._stats["last_duration_ms"] = duration_ms
+                self._stats["last_error"] = None
+                logger.info("Job cancelled", job_id=str(job_id))
+                return
             
             # Mark job as completed
             await self._complete_job(job_id, output)
@@ -137,6 +150,20 @@ class JobProcessor:
                     status="failed",
                     error=error,
                     completed_at=datetime.now(timezone.utc)
+                )
+            )
+            await session.commit()
+
+    async def _cancel_job(self, job_id: UUID, output: dict) -> None:
+        """Mark job as cancelled when orchestration exits cooperatively."""
+        async with self.session_factory() as session:
+            await session.execute(
+                update(Job)
+                .where(Job.id == job_id)
+                .values(
+                    status="cancelled",
+                    output=output,
+                    completed_at=datetime.now(timezone.utc),
                 )
             )
             await session.commit()

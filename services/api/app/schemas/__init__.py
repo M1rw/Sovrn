@@ -484,6 +484,7 @@ class GenerateSiteRequest(BaseModel):
     """Full site generation request."""
     brief: str = Field(..., min_length=10, max_length=10000)
     locale: str = Field(default="en", max_length=10)
+    quality_mode: Literal["fast", "balanced", "high"] = Field(default="balanced")
     industry: Optional[str] = None
     business_type: Optional[str] = None
     target_audience: Optional[dict] = None

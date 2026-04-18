@@ -30,7 +30,7 @@ else:
     _engine_kwargs["pool_timeout"] = settings.DB_POOL_TIMEOUT
 
 engine = create_async_engine(
-    str(settings.DATABASE_URL).replace("postgresql://", "postgresql+asyncpg://"),
+    settings.effective_database_url.replace("postgresql://", "postgresql+asyncpg://"),
     **_engine_kwargs,
 )
 

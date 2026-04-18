@@ -1,5 +1,19 @@
-Password: 'ynoYjy0rkFJl516o'
-Project: 'https://frfexqvcsqzgfntezwez.supabase.co'
-Public: 'sb_publishable_SBO2-8QZTxFjNtVBS0MkYw_7PYuvhYf'
---
-DirectConnection: 'postgresql://postgres:[YOUR-PASSWORD]@db.frfexqvcsqzgfntezwez.supabase.co:5432/postgres'
+Supabase Integration Notes (sanitized)
+=====================================
+
+Do not store production credentials in this file.
+Set all values in local environment files or secret managers.
+
+Required environment variables:
+
+- SUPABASE_ENABLED=true
+- SUPABASE_URL=https://<project-ref>.supabase.co
+- SUPABASE_PUBLISHABLE_KEY=sb_publishable_<redacted>
+- SUPABASE_SERVICE_ROLE_KEY=<redacted>
+- SUPABASE_DB_URL=postgresql://postgres:<password>@db.<project-ref>.supabase.co:5432/postgres
+
+Runtime behavior:
+
+- API uses DATABASE_URL when present.
+- If DATABASE_URL is missing, API falls back to SUPABASE_DB_URL.
+- Keep .env out of git and rotate keys if they were ever committed.

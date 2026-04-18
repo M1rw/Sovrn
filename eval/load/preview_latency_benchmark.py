@@ -54,7 +54,7 @@ class SummaryStats:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run Phase 2 preview latency benchmark")
+    parser = argparse.ArgumentParser(description="Run preview latency benchmark")
     parser.add_argument("--base-url", default=os.getenv("SOVRN_BASE_URL", "http://localhost:8000"))
     parser.add_argument("--token", default=os.getenv("SOVRN_TOKEN", ""))
     parser.add_argument("--project-id", default=os.getenv("SOVRN_PROJECT_ID", ""))
@@ -68,7 +68,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--target-p95-ms", type=float, default=float(os.getenv("SOVRN_PREVIEW_TARGET_P95_MS", "1500")))
     parser.add_argument(
         "--output",
-        default=os.getenv("SOVRN_PREVIEW_BENCH_OUTPUT", "eval/load/phase2_preview_latency_report.json"),
+        default=os.getenv("SOVRN_PREVIEW_BENCH_OUTPUT", "eval/load/preview_latency_report.json"),
     )
     return parser.parse_args()
 
@@ -361,7 +361,7 @@ def main() -> int:
 
         report = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "benchmark": "phase2_preview_latency",
+            "benchmark": "preview_latency",
             "target": {
                 "p95_total_ms_max": args.target_p95_ms,
             },

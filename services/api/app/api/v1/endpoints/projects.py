@@ -46,6 +46,12 @@ from app.schemas import (
 )
 from app.api.v1.deps import bearer_scheme, get_current_user, get_current_user_optional, require_sparks
 from app.services.generation import GenerationService
+from app.services.orchestration import (
+    map_ui_quality_to_target_mode,
+    normalize_ui_quality_mode,
+    resolve_generation_lane,
+    resolve_generation_priority,
+)
 from app.services.patch_contract import resolve_patch_contract_files
 
 
@@ -66,6 +72,25 @@ def _build_preview_artifact_endpoint(
 
 def _serialize_sse_event(event_name: str, payload: dict[str, Any]) -> str:
     return f"event: {event_name}\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
+
+
+def _build_generation_orchestration_metadata(
+    quality_mode_value: Optional[str],
+) -> tuple[dict[str, Any], int]:
+    quality_mode = normalize_ui_quality_mode(quality_mode_value)
+    lane = resolve_generation_lane(quality_mode)
+    target_mode = map_ui_quality_to_target_mode(quality_mode)
+    priority = resolve_generation_priority(quality_mode, lane)
+
+    return (
+        {
+            "enabled": settings.ORCHESTRATION_RUNTIME_ENABLED,
+            "quality_mode": quality_mode,
+            "target_mode": target_mode,
+            "lane": lane,
+        },
+        priority,
+    )
 
 
 async def _get_project_for_user(
@@ -426,13 +451,20 @@ async def generate_site(
         )
     
     # Update project with request data
+    orchestration_metadata, priority = _build_generation_orchestration_metadata(request.quality_mode)
+
+    request_settings: dict[str, Any] = {}
+    if isinstance(request.settings, dict):
+        request_settings = dict(request.settings)
+    request_settings["quality_mode"] = orchestration_metadata["quality_mode"]
+
     project.brief = request.brief
     project.locale = request.locale
     project.industry = request.industry
     project.business_type = request.business_type
     project.target_audience = request.target_audience or {}
     project.goals = request.goals or []
-    project.settings = request.settings or {}
+    project.settings = request_settings
     project.status = ProjectStatus.GENERATING
     
     # Create generation job
@@ -441,15 +473,19 @@ async def generate_site(
         type=JobType.FULL,
         status=JobStatus.QUEUED,
         spark_cost=1,  # Full generation costs 1 spark
+        priority=priority,
         input={
             "brief": request.brief,
             "locale": request.locale,
+            "quality_mode": orchestration_metadata["quality_mode"],
+            "target_mode": orchestration_metadata["target_mode"],
             "industry": request.industry,
             "business_type": request.business_type,
             "target_audience": request.target_audience,
             "goals": request.goals,
             "template_id": str(request.template_id) if request.template_id else None,
-            "settings": request.settings,
+            "settings": request_settings,
+            "orchestration_profile": orchestration_metadata,
         }
     )
     db.add(job)

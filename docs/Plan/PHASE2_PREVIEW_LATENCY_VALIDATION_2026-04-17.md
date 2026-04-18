@@ -63,7 +63,7 @@ powershell -ExecutionPolicy Bypass -File eval/load/check-preview-latency-prereqs
 
 Report output:
 
-- eval/load/phase2_preview_latency_report.json
+- eval/load/preview_latency_report.json
 
 Latest precheck attempt (2026-04-17):
 
@@ -73,8 +73,8 @@ Latest precheck attempt (2026-04-17):
 
 Latest local mock dry-run (2026-04-17, non-gating sanity check):
 
-- Command: `powershell -ExecutionPolicy Bypass -File eval/load/run-preview-latency.ps1 -BaseUrl http://127.0.0.1:8000 -Token mock-token -ProjectId mock-project -Iterations 5 -Warmup 1 -OutputPath eval/load/phase2_preview_latency_report.local_mock.json`
-- Report: `eval/load/phase2_preview_latency_report.local_mock.json`
+- Command: `powershell -ExecutionPolicy Bypass -File eval/load/run-preview-latency.ps1 -BaseUrl http://127.0.0.1:8000 -Token mock-token -ProjectId mock-project -Iterations 5 -Warmup 1 -OutputPath eval/load/preview_latency_report.local_mock.json`
+- Report: `eval/load/preview_latency_report.local_mock.json`
 - successful iterations: 5/5
 - p50 total latency: 5.06 ms
 - p95 total latency: 6.57 ms
@@ -86,14 +86,14 @@ Latest local mock dry-run (2026-04-17, non-gating sanity check):
 
 ## Result
 
-Populate after staging run:
+Staging gate status: pending execution in staging shell with required credentials.
 
-- successful iterations: TODO
-- p50 total latency: TODO ms
-- p95 total latency: TODO ms
-- p99 total latency: TODO ms
-- p95 stream first update latency: TODO ms
-- gate (p95 <= 1500ms and zero failed iterations): TODO PASS/FAIL
+- successful iterations: not yet executed in staging
+- p50 total latency: pending staging run
+- p95 total latency: pending staging run
+- p99 total latency: pending staging run
+- p95 stream first update latency: pending staging run
+- gate (p95 <= 1500ms and zero failed iterations): pending staging run
 
 ## Notes
 

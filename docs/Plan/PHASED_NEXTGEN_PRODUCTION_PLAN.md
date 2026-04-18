@@ -2,9 +2,9 @@
 
 <!-- markdownlint-disable MD024 -->
 
-Last updated: 2026-04-17
+Last updated: 2026-04-18
 Owner: Core Platform Team
-Source baseline: docs/NEXTGEN_ARCHITECTURE_PLAN.md, docs/ROADMAP.md, docs/TODO.md
+Source baseline: docs/NEXTGEN_ARCHITECTURE_PLAN.md, docs/ROADMAP.md, docs/ENGINEERING_BACKLOG.md
 
 ## Purpose
 
@@ -35,6 +35,7 @@ From the current roadmap:
 
 ## Master Program Board
 
+- [ ] Rearrange (cross-phase): production naming, security hygiene, and integration hardening
 - [ ] Phase 0: Program setup, baselines, and SLO instrumentation
 - [x] Phase 1: Complete current execution-track gaps (P4/P5)
 - [ ] Phase 2: WebContainer runtime and instant preview path
@@ -91,6 +92,36 @@ Required behavior:
 - Automatic downgrade and recovery between Q3/Q2/Q1/Q0
 - No user-visible outage during quality downgrade
 - Always preserve correctness and state integrity
+
+---
+
+## Rearrange (Cross-Phase Hardening)
+
+Goal: Remove non-production naming/implementation residue and keep architecture surface enterprise-grade.
+
+### Rearrange Stage 1 Execution Log (2026-04-18)
+
+- [x] Renamed runtime orchestration config keys from phase-prefixed naming to product naming (`ORCHESTRATION_*`) with backward-compatible aliases for existing env vars
+- [x] Renamed generation orchestration metadata payload from legacy keying to `orchestration_profile`
+- [x] Added first-class Supabase environment integration in API config (`SUPABASE_*`) with secure DB bootstrap fallback (`DATABASE_URL` then `SUPABASE_DB_URL`)
+- [x] Sanitized plaintext Supabase note file and replaced with secure environment-driven setup template
+- [x] Added repository-wide Rearrange audit tool: `scripts/rearrange_audit.py`
+- [x] Published Stage 1 audit report: `docs/Plan/REARRANGE_STAGE1_AUDIT.md` (239 files scanned)
+
+### Rearrange Stage 2 Execution Log (2026-04-18)
+
+- [x] Removed deprecated runtime fallback read for legacy orchestration payload key in job processing endpoint
+- [x] Archived superseded documentation into `docs/archive/rearrange-stage2-2026-04-18/` and rebuilt active doc indexes for production guidance
+- [x] Moved Supabase setup instructions into `docs/security/SUPABASE_SETUP.md` and removed root-level loose secret-note file
+- [x] Promoted `docs/ENGINEERING_BACKLOG.md` as active engineering backlog and reduced stale duplicate indexes
+- [x] Implemented missing cultural checks in `eval/benchmark.py` for date-format and payment-method scoring
+- [x] Upgraded audit script defaults to Stage 2 output and excluded archived material from active-surface findings
+
+### Rearrange Remaining Backlog
+
+- [ ] Eliminate remaining phase-prefix references in legacy docs/tests where no compatibility requirement exists
+- [ ] Replace remaining non-production language in active docs and implementation comments
+- [ ] Close remaining debt markers in runtime-critical files first (API, worker, orchestration, preview pipeline)
 
 ---
 
@@ -421,20 +452,30 @@ Goal: Add architect/coder/critic loops without destabilizing latency.
 
 ### Frontend
 
-- [ ] Add generation timeline UI with per-agent status and logs
-- [ ] Add user controls for quality mode (fast, balanced, high)
+- [x] Add generation timeline UI with per-agent status and logs
+- [x] Add user controls for quality mode (fast, balanced, high)
 
 ### Backend
 
-- [ ] Build orchestration graph with deadlines and cancellation
-- [ ] Add AQE controller for Q3/Q2/Q1/Q0 transitions
-- [ ] Add critic retry policy and strict max attempt limits
+- [x] Build orchestration graph with deadlines and cancellation
+- [x] Add AQE controller for Q3/Q2/Q1/Q0 transitions
+- [x] Add critic retry policy and strict max attempt limits
 
 ### Inference and Infra
 
 - [ ] Route specialist tasks through adapter-based model profiles
-- [ ] Add budget manager (token, time, and retry budgets per request)
-- [ ] Add queue priority for interactive traffic over background loops
+- [x] Add budget manager (time and retry budgets per request)
+- [x] Add queue priority for interactive traffic over background loops
+
+### Phase 4 Execution Log (2026-04-18)
+
+- [x] Added orchestration runtime with architect/coder/critic stages, cancellation checks, critic retry policy, and budget enforcement
+- [x] Added AQE selection using queue depth + inference stats signals with Q3/Q2/Q1/Q0 transitions
+- [x] Wired generation request contract to quality-mode controls and production queue priority mapping
+- [x] Persisted live orchestration state into job output for polling-driven timeline rendering
+- [x] Added worker cancellation-safe terminal handling for cooperatively cancelled orchestration runs
+- [x] Added builder quality selector, AQE badge, and live orchestration timeline mapping
+- [x] Added backend orchestration tests and frontend timeline parser tests with runtime validation
 
 ### Test and Exit Gates
 
