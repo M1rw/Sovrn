@@ -6,12 +6,11 @@ SOVRN is a production AI website platform with a hosted product surface and a se
 
 Use these files first:
 
-- docs/SOVRN_OVERVIEW.md
-- docs/ARCHITECTURE.md
-- docs/ROADMAP.md
-- docs/ENGINEERING_BACKLOG.md
-- docs/DECISIONS.md
-- docs/Plan/PHASED_NEXTGEN_PRODUCTION_PLAN.md
+- docs/README.md
+- docs/active/tracking/PROJECT_DASHBOARD.md
+- docs/active/planning/MASTER_EXECUTION_PLAN.md
+- docs/active/planning/ENGINEERING_BACKLOG.md
+- docs/active/agent/CODEXX_AGENT_GUIDE.md
 
 ## Security Baseline
 
@@ -21,6 +20,6 @@ Use these files first:
 
 ## Repository Hygiene
 
-- Active documentation lives under docs/.
-- Historical snapshots are preserved under docs/archive/rearrange-stage2-2026-04-18/.
+- Active documentation lives under docs/active/.
+- Historical snapshots are preserved under docs/archive/rearrange-stage2-2026-04-18/ and docs/archive/rearrange-stage3-2026-04-18/.
 - Prefer ORCHESTRATION_* naming for runtime controls.

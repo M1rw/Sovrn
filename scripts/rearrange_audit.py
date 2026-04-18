@@ -57,6 +57,7 @@ EXCLUDED_DIR_NAMES = {
 EXCLUDED_FILE_NAMES = {
     "REARRANGE_STAGE1_AUDIT.md",
     "REARRANGE_STAGE2_AUDIT.md",
+    "REARRANGE_AUDIT.md",
     "rearrange_audit.py",
 }
 
@@ -109,7 +110,7 @@ def _is_allowed_finding(path: Path, pattern_key: str, line: str) -> bool:
     normalized_path = str(path).replace("\\", "/")
     if normalized_path.endswith("services/api/app/core/config.py"):
         return True
-    if normalized_path.endswith("docs/Plan/PHASED_NEXTGEN_PRODUCTION_PLAN.md"):
+    if normalized_path.endswith("docs/active/planning/MASTER_EXECUTION_PLAN.md"):
         return True
 
     return any(regex.search(line) for regex in PHASE_PREFIX_ALLOWED_PATTERNS)
@@ -242,7 +243,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--output",
-        default="docs/Plan/REARRANGE_STAGE2_AUDIT.md",
+        default="docs/active/tracking/REARRANGE_AUDIT.md",
         help="Output markdown report path.",
     )
     args = parser.parse_args()
@@ -257,7 +258,7 @@ def main() -> int:
         if findings:
             findings_by_file[path] = findings
 
-    report_title = "Rearrange Stage 2 Audit"
+    report_title = "Repository Rearrange Audit"
     report = _build_report(
         root=root,
         files=files,
