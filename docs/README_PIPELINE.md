@@ -1,5 +1,19 @@
 # SOVRN - AI-Powered Website Generation Platform
 
+## Canonical Documentation Entry Points
+
+Use these files first for the current, canonical understanding of SOVRN:
+
+- [SOVRN_OVERVIEW.md](SOVRN_OVERVIEW.md)
+- [ARCHITECTURE.md](ARCHITECTURE.md)
+- [ROADMAP.md](ROADMAP.md)
+- [TODO.md](TODO.md)
+- [DECISIONS.md](DECISIONS.md)
+
+## Legacy Documentation Note
+
+This pipeline README is retained as historical context. Some claims below may reflect earlier implementation phases and may not be current canonical status.
+
 ## 🎉 Status: FULLY OPERATIONAL ✅
 
 The complete AI-powered website generation pipeline is ready for production use.
@@ -292,9 +306,9 @@ curl http://localhost/api/v1/health
 
 ## Documentation
 
-- **[PIPELINE_STATUS.md](./PIPELINE_STATUS.md)** - Detailed pipeline information
-- **[IMPLEMENTATION_COMPLETE.md](./IMPLEMENTATION_COMPLETE.md)** - Complete implementation guide
-- **[SESSION_SUMMARY.md](./SESSION_SUMMARY.md)** - What was accomplished
+- **[PIPELINE_STATUS.md](legacy/status/PIPELINE_STATUS.md)** - Detailed pipeline information
+- **[IMPLEMENTATION_COMPLETE.md](legacy/status/IMPLEMENTATION_COMPLETE.md)** - Complete implementation guide
+- **[SESSION_SUMMARY.md](legacy/status/SESSION_SUMMARY.md)** - What was accomplished
 
 ## Troubleshooting
 
